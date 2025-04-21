@@ -1,6 +1,12 @@
-# MSAGA
-**M**AKE **S**YSTOLIC **A**RRAY **G**REAT **A**GAIN
-
+<!-- <h1>
+  <img src="docs/icon.png" alt="logon" width="200" style="vertical-align: middle; margin-right: 8px;" />
+  <b style="color:red;">M</b>AKE
+  <b style="color:red;">S</b>YSTOLIC
+  <b style="color:red;">A</b>RRAY
+  <b style="color:red;">G</b>REAT
+  <b style="color:red;">A</b>GAIN !!!
+</h1> -->
+![](docs/msaga.png)
 ## Setup
 This project is **_not_** a standalone project. It's designed to be integrated into chipyard framework.
 

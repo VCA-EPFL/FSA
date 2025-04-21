@@ -73,10 +73,11 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
       pipe_no_reset(pe.io.d_output)
     }}
     // down -> up
-    val boundry_in = Wire(Valid(accType))
-    boundry_in.valid := false.B
-    boundry_in.bits := accType.zero
-    col.reverse.foldLeft(boundry_in) { (in, pe) => {
+    val bottom_in = Wire(Valid(accType))
+    // TODO: control the bottom input
+    bottom_in.valid := true.B
+    bottom_in.bits := accType.zero
+    col.reverse.foldLeft(bottom_in) { (in, pe) => {
       pe.io.d_input := in
       pipe_no_reset(pe.io.u_output)
     }}

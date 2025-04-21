@@ -41,9 +41,13 @@ class PEData(SignalWrapper):
 
 
 class CmpCtrl(SignalWrapper):
+    UPDATE_NEW_MAX = 0
+    PROP_NEW_MAX = 1
+    PROP_DIFF = 2
+    PROP_ZERO = 3
+
     valid: int
-    update_new_max: int
-    prop_new_max: int
+    cmd: int
 
     def __init__(self, sim: PyVerilator, index: int):
         super().__init__(sim, index)
@@ -51,8 +55,7 @@ class CmpCtrl(SignalWrapper):
     
     def reset(self):
         self.valid = 0
-        self.update_new_max = 0
-        self.prop_new_max = 0
+        self.cmd = 0
     
     def _to_signal_name(self, name: str) -> str:
         if name == 'valid':
@@ -63,31 +66,31 @@ class CmpCtrl(SignalWrapper):
 
 class PECtrl(SignalWrapper):
     valid: int
-    acc: int
-    sub: int
-    add_sub_ui: int
     mac: int
-    exp: int
+    acc_ui: int
     load_reg_li: int
     load_reg_ui: int
     flow_lr: int
     flow_ud: int
-    flow_reg_d: int
+    flow_du: int
+    update_reg: int
+    exp2: int
+
     def __init__(self, sim: PyVerilator, index: int):
         super().__init__(sim, index)
     
     def reset(self):
         self.valid = 0
-        self.acc = 0
-        self.sub = 0
-        self.add_sub_ui = 0
         self.mac = 0
-        self.exp = 0
+        self.acc_ui = 0
         self.load_reg_li = 0
         self.load_reg_ui = 0
         self.flow_lr = 0
         self.flow_ud = 0
-        self.flow_reg_d = 0
+        self.flow_du = 0
+        self.update_reg = 0
+        self.exp2 = 0
+        
     
     def _to_signal_name(self, name: str) -> str:
         if name == 'valid':
@@ -194,6 +197,7 @@ def test_attention_int16(sa: SystolicArray):
     V = np.random.randint(-100, 100, size=(sa.dim, sa.dim), dtype=np.int16)
     S = np.matmul(Q, K)
     print_hex("Q", Q)
+    print_hex("Q_transpose", Q.T)
     print_hex("K", K)
     print_hex("S", S)
     K_padded = pad_matrix_tri_ul_lr(K)
@@ -231,8 +235,7 @@ def test_attention_int16(sa: SystolicArray):
             for i in range(sa.dim):
                 sa.pe_data[i].data = Q[sa.dim - 1 - cycle, i]
                 sa.pe_ctrl[i].valid = 1
-                sa.pe_ctrl[i].load_reg_li = sa.dim - cycle
-                sa.pe_ctrl[i].flow_lr = 1
+                sa.pe_ctrl[i].load_reg_li = 1
 
         # Mul K * transpose(Q)
         for i in range(sa.dim):
@@ -241,22 +244,35 @@ def test_attention_int16(sa: SystolicArray):
                 sa.pe_data[row].data = K_padded[row, cycle - sa.dim]
                 sa.pe_ctrl[row].valid = 1
                 sa.pe_ctrl[row].mac = 1
+                sa.pe_ctrl[row].acc_ui = 0
                 sa.pe_ctrl[row].flow_lr = 1
-                sa.pe_ctrl[row].add_sub_ui = 0
 
         # Update new max, re-put S back
         if 2 * sa.dim <= cycle < 3 * sa.dim:
             sa.cmp_ctrl.valid = 1
-            sa.cmp_ctrl.update_new_max = 1
+            sa.cmp_ctrl.cmd = CmpCtrl.UPDATE_NEW_MAX
         
         # Propagate new max down
         if cycle == 3 * sa.dim:
             sa.cmp_ctrl.valid = 1
-            sa.cmp_ctrl.prop_new_max = 1
+            sa.cmp_ctrl.cmd = CmpCtrl.PROP_NEW_MAX
 
         # Propagate old_max - new_max down
         if cycle == 3 * sa.dim + 1:
             sa.cmp_ctrl.valid = 1
+            sa.cmp_ctrl.cmd = CmpCtrl.PROP_DIFF
+        
+        # Propagate zero down from CMP
+        if cycle == 3 * sa.dim + 2:
+            sa.cmp_ctrl.valid = 1
+            sa.cmp_ctrl.cmd = CmpCtrl.PROP_ZERO
+
+        # Propagate zero up from bottom for x = x*log2(e) + 0
+        for i in range(sa.dim):
+            row = sa.dim - 1 - i
+            if 2 * sa.dim + 3 + i <= cycle < 3 * sa.dim + 3 + i:
+                sa.pe_ctrl[row].valid = 1
+                sa.pe_ctrl[row].flow_du = 1
 
         # Re-put S back
         for row in range(sa.dim):
@@ -266,54 +282,46 @@ def test_attention_int16(sa: SystolicArray):
             if cycle == 3 * sa.dim:
                 sa.pe_ctrl[row].valid = 1
                 sa.pe_ctrl[row].load_reg_ui = 1
-
-        # minmus row max
-        if 3 * sa.dim + 1 <= cycle < 4 * sa.dim + 1:
-            local_cycle = cycle - (3 * sa.dim + 1)
-            sa.pe_ctrl[local_cycle].valid = 1
-            sa.pe_ctrl[local_cycle].sub = 1
-            sa.pe_ctrl[local_cycle].add_sub_ui = 1
-            sa.pe_ctrl[local_cycle].flow_ud = 1
         
-        # pass down old_max - new_max
-        if 3 * sa.dim + 2 <= cycle < 4 * sa.dim + 2:
-            local_cycle = cycle - (3 * sa.dim + 2)
-            sa.pe_ctrl[local_cycle].valid = 1
-            sa.pe_ctrl[local_cycle].flow_ud = 1
-        
-        # P = exp(S - row_max)
-        # exp stage 1
-        if 3 * sa.dim + 2 <= cycle < 4 * sa.dim + 2:
-            local_cycle = cycle - (3 * sa.dim + 2)
-            sa.pe_ctrl[local_cycle].valid = 1
-            sa.pe_ctrl[local_cycle].exp = 1
-        
-        # exp stage 2
-        if 3 * sa.dim + 3 <= cycle < 4 * sa.dim + 3:
-            local_cycle = cycle - (3 * sa.dim + 3)
-            sa.pe_ctrl[local_cycle].valid = 1
-            sa.pe_ctrl[local_cycle].exp = 1
-
-        # pass down exp sum
-        if 3 * sa.dim + 4 <= cycle < 4 * sa.dim + 4:
-            local_cycle = cycle - (3 * sa.dim + 4)
-            sa.pe_ctrl[local_cycle].valid = 1
-            sa.pe_ctrl[local_cycle].acc = 1
-            sa.pe_ctrl[local_cycle].add_sub_ui = 1
-        
-        # exp sum propagated at acc out
-        if 4 * sa.dim + 4 == cycle:
-            #print("exp_sum:", hex(sa.acc_out[0].data), sa.acc_out[0].valid)
-            pass
-        
-        # Mul P * V
-        for row in range(sa.dim):
-            if 3 * sa.dim + 5 + row <= cycle < 3 * sa.dim + 5 + row + sa.dim:
+            # subtract row_max
+            if cycle == 3 * sa.dim + 1 + row:
+                sa.pe_ctrl[row].valid = 1
+                sa.pe_ctrl[row].update_reg = 1
+                sa.pe_ctrl[row].acc_ui = 1
+                sa.pe_ctrl[row].flow_ud = 1 # pass down new_max
+                sa.pe_ctrl[row].flow_lr = 1
+                # s = s * 1 + (-row_max)
+                sa.pe_data[row].data = 1
+            
+            # 1. pass down old_max - new_max
+            # 2. compute exp stage 1: x = x * log2(e)
+            if cycle == 3 * sa.dim + 2 + row:
+                sa.pe_ctrl[row].valid = 1
+                sa.pe_ctrl[row].flow_ud = 1 # pass down old_max - new_max
+                sa.pe_ctrl[row].update_reg = 1 # compute exp stage 1
+                sa.pe_ctrl[row].acc_ui = 0
+                sa.pe_ctrl[row].flow_lr = 1
+                sa.pe_data[row].data = 2 # (use log2(e) = 2 for testing)
+            # exp stage 2: x = pow2(x)
+            if cycle == 3 * sa.dim + 3 + row:
+                sa.pe_ctrl[row].valid = 1
+                sa.pe_ctrl[row].exp2 = 1
+            # exp sum
+            if cycle == 3 * sa.dim + 4 + row:
                 sa.pe_ctrl[row].valid = 1
                 sa.pe_ctrl[row].mac = 1
+                sa.pe_ctrl[row].acc_ui = 1
                 sa.pe_ctrl[row].flow_lr = 1
-                sa.pe_ctrl[row].add_sub_ui = 1
+                sa.pe_data[row].data = 1 # x = x * 1 + 0
+
+            # O = P @ V
+            if 3 * sa.dim + 5 + row <= cycle < 4 * sa.dim + 5 + row:
+                sa.pe_ctrl[row].valid = 1
+                sa.pe_ctrl[row].mac = 1
+                sa.pe_ctrl[row].acc_ui = 1
+                sa.pe_ctrl[row].flow_lr = 1
                 sa.pe_data[row].data = V_padded[row, cycle - (3 * sa.dim + 5)]
+
         
         for col in range(sa.dim):
             if 4 * sa.dim + 2 + col == cycle:

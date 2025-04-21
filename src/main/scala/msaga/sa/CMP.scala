@@ -10,6 +10,14 @@ object CmpCMD {
   def SUB = 1.U(width.W)
 }
 
+object CmpControlCmd {
+  def width = 2
+  def UPDATE = 0.U(width.W)
+  def PROP_MAX = 1.U(width.W)
+  def PROP_MAX_DIFF = 2.U(width.W)
+  def PROP_ZERO = 3.U(width.W)
+}
+
 abstract class CmpUnit[A <: Data](accType: A) extends Module {
   val io = IO(new Bundle {
     val in_a = Input(accType)
@@ -20,8 +28,7 @@ abstract class CmpUnit[A <: Data](accType: A) extends Module {
 }
 
 class CmpControl extends Bundle {
-  val update_new_max = Bool()
-  val prop_new_max = Bool()
+  val cmd = UInt(CmpControlCmd.width.W)
 }
 
 class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) extends Module {
@@ -37,24 +44,27 @@ class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) exte
   val oldMax = RegInit(accType.minimum)
   val newMax = RegInit(accType.minimum)
 
-  val update_new_max = io.in_ctrl.bits.update_new_max
-  val prop_new_max = io.in_ctrl.bits.prop_new_max
-  val prop_delta_max = !update_new_max && !prop_new_max
+  val cmd = io.in_ctrl.bits.cmd
+  val update_new_max = cmd === CmpControlCmd.UPDATE
+  val prop_new_max = cmd === CmpControlCmd.PROP_MAX
+  val prop_diff = cmd === CmpControlCmd.PROP_MAX_DIFF
+  val prop_zero = cmd === CmpControlCmd.PROP_ZERO
+  val zero = accType.zero
 
-  cmpUnit.io.in_a := newMax
-  cmpUnit.io.in_b := Mux(update_new_max, io.d_input.bits, oldMax)
+  cmpUnit.io.in_a := Mux(update_new_max, io.d_input.bits, Mux(prop_new_max, zero, oldMax))
+  cmpUnit.io.in_b := newMax
   cmpUnit.io.in_cmd := Mux(update_new_max, CmpCMD.MAX, CmpCMD.SUB)
 
   when(io.in_ctrl.fire) {
     when(update_new_max) {
       newMax := cmpUnit.io.out
-    }.elsewhen(prop_delta_max) {
+    }.elsewhen(prop_diff) {
       oldMax := newMax
       newMax := accType.minimum
     }
   }
 
-  io.d_output.bits := Mux(update_new_max, io.d_input.bits, Mux(prop_new_max, newMax, cmpUnit.io.out))
+  io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, io.d_input.bits, cmpUnit.io.out))
   io.d_output.valid := io.in_ctrl.valid
   io.out_ctrl := io.in_ctrl
 }

@@ -5,11 +5,9 @@ import chisel3.util._
 import ArithmeticSyntax._
 
 object MacCMD {
-  def width = 2
-  def ADD = 0.U(width.W)
-  def SUB = 1.U(width.W)
-  def MAC = 2.U(width.W)
-  def EXP = 3.U(width.W)
+  def width = 1
+  def MAC = 0.U(width.W)
+  def EXP2 = 1.U(width.W)
 }
 
 abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType: E, accType: A) extends Module {
@@ -23,16 +21,18 @@ abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType:
 }
 
 class PECtrl(cols: Int) extends Bundle {
-  val acc = Bool()
-  val sub = Bool()
-  val add_sub_ui = Bool()
   val mac = Bool()
-  val exp = Bool()
-  val load_reg_li = UInt(log2Up(cols + 1).W)
+  val acc_ui = Bool()
+  val load_reg_li = Bool()
   val load_reg_ui = Bool()
+  // pass through
   val flow_lr = Bool()
   val flow_ud = Bool()
-  val flow_reg_d = Bool()
+  val flow_du = Bool()
+  // mac_out -> reg
+  val update_reg = Bool()
+  // compute 2^reg
+  val exp2 = Bool()
 }
 
 class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
@@ -53,53 +53,32 @@ class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
 
   val reg = Reg(elemType)
   val ctrl = io.in_ctrl.bits
+  val fire = io.in_ctrl.fire
 
-  when(io.in_ctrl.fire) {
-    when(ctrl.load_reg_li === 1.U) {
+  when(fire) {
+    when(ctrl.load_reg_li) {
       reg := io.l_input.bits
     }.elsewhen(ctrl.load_reg_ui) {
       reg := io.u_input.bits
-    }.elsewhen(ctrl.sub || ctrl.exp) {
+    }.elsewhen(ctrl.update_reg || ctrl.exp2) {
+      // FIXME: if macUnit.out is accType, it should be down cast to elemType
       reg := macUnit.io.out
     }
   }
 
-  val expReg = RegNext(ctrl.exp && io.in_ctrl.fire, false.B)
-  val exp1 = ctrl.exp && !expReg
-  val exp2 = ctrl.exp && expReg
-
-  /*
-    Exp take 2 cycles:
-    cycle 0: y = x * log2(e)
-    cycle 1: z = 2^y
-  */
-
   macUnit.io.in_a := reg
-  macUnit.io.in_b := Mux(exp1, elemType.lg2_e, io.l_input.bits)
-  macUnit.io.in_c := Mux(exp1, accType.zero,
-    Mux(ctrl.add_sub_ui,
-      Mux(io.u_input.valid, io.u_input.bits, accType.zero),
-      io.d_input.bits
-    )
-  )
-  macUnit.io.in_cmd := Mux(ctrl.mac || exp1, MacCMD.MAC,
-    Mux(ctrl.acc, MacCMD.ADD, Mux(ctrl.sub, MacCMD.SUB, MacCMD.EXP))
-  )
+  macUnit.io.in_b := io.l_input.bits
+  macUnit.io.in_c := Mux(ctrl.acc_ui, io.u_input.bits, io.d_input.bits)
+  macUnit.io.in_cmd := Mux(ctrl.exp2, MacCMD.EXP2, MacCMD.MAC)
 
   io.out_ctrl := io.in_ctrl
-  io.out_ctrl.bits.load_reg_li := ctrl.load_reg_li - 1.U
 
-  io.r_output.bits := io.l_input.bits
-  io.r_output.valid := io.in_ctrl.fire && ctrl.flow_lr
+  io.r_output.bits := Mux(ctrl.load_reg_li, reg, io.l_input.bits)
+  io.r_output.valid := fire && (ctrl.load_reg_li || ctrl.flow_lr)
 
-  io.u_output.bits := macUnit.io.out
-  io.u_output.valid := io.in_ctrl.fire && ((ctrl.mac || ctrl.acc) && !ctrl.add_sub_ui)
+  io.d_output.bits := Mux(ctrl.mac && ctrl.acc_ui, macUnit.io.out, io.u_input.bits)
+  io.d_output.valid := fire && (ctrl.mac && ctrl.acc_ui || ctrl.flow_ud)
 
-  io.d_output.bits := Mux(ctrl.flow_ud, io.u_input.bits,
-    Mux(ctrl.flow_reg_d, reg, macUnit.io.out)
-  )
-  io.d_output.valid := io.in_ctrl.fire && (ctrl.flow_ud || ctrl.flow_reg_d ||
-    (ctrl.mac || ctrl.acc) && ctrl.add_sub_ui
-  )
-
+  io.u_output.bits := Mux(ctrl.mac && !ctrl.acc_ui, macUnit.io.out, io.d_input.bits)
+  io.u_output.valid := fire && (ctrl.mac && !ctrl.acc_ui || ctrl.flow_du)
 }

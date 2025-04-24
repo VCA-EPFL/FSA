@@ -23,11 +23,11 @@ trait ArithmeticOps[T] {
 object Arithmetic {
   implicit object SIntArithmetic extends Arithmetic[SInt] {
     override implicit def cast(self: SInt): ArithmeticOps[SInt] = new ArithmeticOps[SInt] {
-      override def zero = 0.S
-      override def one = 1.S
-      override def minimum: SInt = (-(1 << (self.getWidth-1))).S
+      override def zero = 0.S(self.getWidth.W)
+      override def one = 1.S(self.getWidth.W)
+      override def minimum: SInt = (-(1 << (self.getWidth-1))).S(self.getWidth.W)
       // FIXME: this is for testing purpose only
-      override def lg2_e = 2.S
+      override def lg2_e = 2.S(self.getWidth.W)
     }
   }
 }

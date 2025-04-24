@@ -14,7 +14,7 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val io = IO(new Bundle {
     val cmp_ctrl = Flipped(Valid(new CmpControl))
-    val pe_ctrl = Flipped(Vec(rows, Valid(new PECtrl(cols))))
+    val pe_ctrl = Flipped(Vec(rows, Valid(new PECtrl)))
     val pe_data = Input(Vec(rows, elemType))
     val acc_out = Output(Vec(cols, Valid(accType)))
   })

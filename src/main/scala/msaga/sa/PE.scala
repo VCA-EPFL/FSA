@@ -20,7 +20,7 @@ abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType:
   })
 }
 
-class PECtrl(cols: Int) extends Bundle {
+class PECtrl extends Bundle {
   val mac = Bool()
   val acc_ui = Bool()
   val load_reg_li = Bool()
@@ -33,14 +33,21 @@ class PECtrl(cols: Int) extends Bundle {
   val update_reg = Bool()
   // compute 2^reg
   val exp2 = Bool()
+
+  // getElements might be dangerous, define them manually
+  def getCtrlElements: Seq[Bool]= Seq(
+    mac, acc_ui, load_reg_li, load_reg_ui,
+    flow_lr, flow_ud, flow_du,
+    update_reg, exp2
+  )
 }
 
 class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
 (cols: Int, elemType: E, accType: A, macGen: () => MAC) extends Module
 {
   val io = IO(new Bundle {
-    val in_ctrl = Flipped(Valid(new PECtrl(cols)))
-    val out_ctrl = Valid(new PECtrl(cols))
+    val in_ctrl = Flipped(Valid(new PECtrl))
+    val out_ctrl = Valid(new PECtrl)
     val u_input = Flipped(Valid(accType))
     val u_output = Valid(accType)
     val d_input = Flipped(Valid(accType))

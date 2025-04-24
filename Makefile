@@ -1,5 +1,4 @@
 BUILD_DIR = ./build
-SA_VERILOG_FILE = $(abspath $(BUILD_DIR)/SystolicArray.sv)
 
 SCALA_SRC = $(shell find ./src/main -name "*.scala")
 
@@ -7,27 +6,33 @@ DIM ?= 3
 ELEM_WIDTH ?= 16
 ACC_WIDTH ?= 16
 
-.PHONY: gen_sv unit_test clean
+.PHONY: gen_systolic_array unit_test_systolic_array clean
 
-$(SA_VERILOG_FILE): gen_sv
-
-gen_sv: $(SCALA_SRC)
+gen_systolic_array: $(SCALA_SRC)
 	cd ../.. && sbt \
 		"project msaga" \
-		"runMain msaga.sa.SVGen \
-			-td $(abspath $(BUILD_DIR)) \
+		"runMain msaga.svgen.SystolicArrayGen \
+			-td $(abspath $(BUILD_DIR)/systolic_array) \
 			--dim $(DIM) \
 			--elem-width $(ELEM_WIDTH) \
 			--acc-width $(ACC_WIDTH)"
 
-unit_test: $(SA_VERILOG_FILE) $(SCALA_SRC)
+unit_test_systolic_array: gen_systolic_array
 	cd python && uv run unit_test/sa_test.py \
-		--top-file $(SA_VERILOG_FILE) \
-		--src-dir $(abspath $(BUILD_DIR)) \
-		--build-dir $(abspath $(BUILD_DIR)) \
+		--top-file $(abspath $(BUILD_DIR)/systolic_array/SystolicArray.sv) \
+		--src-dir $(abspath $(BUILD_DIR)/systolic_array) \
+		--build-dir $(abspath $(BUILD_DIR)/systolic_array) \
 		--dim $(DIM) \
 		--elem-width $(ELEM_WIDTH) \
 		--acc-width $(ACC_WIDTH)
 
+gen_msaga: $(SCALA_SRC)
+	cd ../.. && sbt \
+		"project msaga" \
+		"runMain msaga.svgen.MSAGAGen \
+			-td $(abspath $(BUILD_DIR)/msaga) \
+			--dim $(DIM) \
+			--elem-width $(ELEM_WIDTH) \
+			--acc-width $(ACC_WIDTH)"
 clean:
 	rm -rf $(BUILD_DIR)

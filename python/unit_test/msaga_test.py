@@ -194,6 +194,18 @@ def test_msaga(sim: PyVerilator, dim: int):
     for _ in range( 7 * dim):
         sim.clock.tick()
     
+    V_desc = MatrixDesc(
+        origin_addr=2 * dim,
+        dim=dim,
+        rev_v=True, rev_h=False,
+        delay_u=False, delay_d=True
+    )
+    inst.set(ATTENTION_VALUE, V_desc.to_rs(), 0)
+    sim.clock.tick()
+
+    inst.reset()
+    for _ in range(7 * dim):
+        sim.clock.tick()
     
 
 

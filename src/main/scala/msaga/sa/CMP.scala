@@ -2,13 +2,8 @@ package msaga.sa
 
 import chisel3._
 import chisel3.util._
-import ArithmeticSyntax._
-
-object CmpCMD {
-  def width = 1
-  def MAX = 0.U(width.W)
-  def SUB = 1.U(width.W)
-}
+import msaga.arithmetic._
+import msaga.arithmetic.ArithmeticSyntax._
 
 object CmpControlCmd {
   def width = 2
@@ -16,15 +11,6 @@ object CmpControlCmd {
   def PROP_MAX = 1.U(width.W)
   def PROP_MAX_DIFF = 2.U(width.W)
   def PROP_ZERO = 3.U(width.W)
-}
-
-abstract class CmpUnit[A <: Data](accType: A) extends Module {
-  val io = IO(new Bundle {
-    val in_a = Input(accType)
-    val in_b = Input(accType)
-    val in_cmd = Input(UInt(CmpCMD.width.W))
-    val out = Output(accType)
-  })
 }
 
 class CmpControl extends Bundle {

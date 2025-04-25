@@ -2,21 +2,19 @@ package msaga.sa
 
 import chisel3._
 import chisel3.util._
-import ArithmeticSyntax._
+import msaga.arithmetic.ArithmeticSyntax._
+import msaga.arithmetic.{Arithmetic, ArithmeticImpl}
 
 class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
 (
-  rows: Int, cols: Int,
-  elemType: E, accType: A,
-  macGen: () => MacUnit[E, A],
-  cmpGen: () => CmpUnit[A]
-) extends Module {
+  rows: Int, cols: Int
+)(implicit ev: ArithmeticImpl[E, A]) extends Module {
 
   val io = IO(new Bundle {
     val cmp_ctrl = Flipped(Valid(new CmpControl))
     val pe_ctrl = Flipped(Vec(rows, Valid(new PECtrl)))
-    val pe_data = Input(Vec(rows, elemType))
-    val acc_out = Output(Vec(cols, Valid(accType)))
+    val pe_data = Input(Vec(rows, ev.elemType))
+    val acc_out = Output(Vec(cols, Valid(ev.accType)))
   })
 
   val debug_counter = RegInit(0.U(32.W))
@@ -33,8 +31,8 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
       PE[row-1,0] -> ...        -> PE[row-1, col-1]
   */
 
-  val cmp_array = Seq.fill(cols){ Module(new CMP(accType, cmpGen)) }
-  val mesh = Seq.fill(rows) { Seq.fill(cols) { Module(new PE(cols, elemType, accType, macGen)) } }
+  val cmp_array = Seq.fill(cols){ Module(new CMP(ev.accType, ev.accCmp _)) }
+  val mesh = Seq.fill(rows) { Seq.fill(cols) { Module(new PE(ev.elemType, ev.accType, ev.peMac _) ) } }
   val meshT = mesh.transpose
 
   def pipe_no_reset[T <: Data](in: Valid[T]) = {
@@ -53,7 +51,7 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
     }}
   }
   io.pe_data.map(d => {
-    val v = Wire(Valid(elemType))
+    val v = Wire(Valid(ev.elemType))
     v.valid := true.B
     v.bits := d
     v
@@ -73,10 +71,10 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
       pipe_no_reset(pe.io.d_output)
     }}
     // down -> up
-    val bottom_in = Wire(Valid(accType))
+    val bottom_in = Wire(Valid(ev.accType))
     // TODO: control the bottom input
     bottom_in.valid := true.B
-    bottom_in.bits := accType.zero
+    bottom_in.bits := ev.accType.zero
     col.reverse.foldLeft(bottom_in) { (in, pe) => {
       pe.io.d_input := in
       pipe_no_reset(pe.io.u_output)

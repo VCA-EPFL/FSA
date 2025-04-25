@@ -2,23 +2,8 @@ package msaga.sa
 
 import chisel3._
 import chisel3.util._
-import ArithmeticSyntax._
+import msaga.arithmetic._
 
-object MacCMD {
-  def width = 1
-  def MAC = 0.U(width.W)
-  def EXP2 = 1.U(width.W)
-}
-
-abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType: E, accType: A) extends Module {
-  val io = IO(new Bundle {
-    val in_a = Input(elemType) // reg in PE
-    val in_b = Input(elemType) // left input
-    val in_c = Input(accType) // up/down input
-    val in_cmd = Input(UInt(MacCMD.width.W))
-    val out = Output(accType)
-  })
-}
 
 class PECtrl extends Bundle {
   val mac = Bool()
@@ -43,7 +28,7 @@ class PECtrl extends Bundle {
 }
 
 class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
-(cols: Int, elemType: E, accType: A, macGen: () => MAC) extends Module
+(elemType: E, accType: A, macGen: () => MAC) extends Module
 {
   val io = IO(new Bundle {
     val in_ctrl = Flipped(Valid(new PECtrl))

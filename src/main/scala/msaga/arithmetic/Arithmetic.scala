@@ -1,4 +1,4 @@
-package msaga.sa
+package msaga.arithmetic
 
 import chisel3._
 
@@ -41,4 +41,45 @@ object ArithmeticSyntax {
     def minimum: T = self.minimum
     def lg2_e: T = self.lg2_e
   }
+}
+
+
+
+object MacCMD {
+  def width = 1
+  def MAC = 0.U(width.W)
+  def EXP2 = 1.U(width.W)
+}
+
+object CmpCMD {
+  def width = 1
+  def MAX = 0.U(width.W)
+  def SUB = 1.U(width.W)
+}
+
+abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType: E, accType: A) extends Module {
+  val io = IO(new Bundle {
+    val in_a = Input(elemType) // reg in PE
+    val in_b = Input(elemType) // left input
+    val in_c = Input(accType) // up/down input
+    val in_cmd = Input(UInt(MacCMD.width.W))
+    val out = Output(accType)
+  })
+}
+
+abstract class CmpUnit[A <: Data](accType: A) extends Module {
+  val io = IO(new Bundle {
+    val in_a = Input(accType)
+    val in_b = Input(accType)
+    val in_cmd = Input(UInt(CmpCMD.width.W))
+    val out = Output(accType)
+  })
+}
+
+abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic]{
+  def elemType: E
+  def accType: A
+  def peMac: MacUnit[E, A]
+  def accMac: MacUnit[A, A]
+  def accCmp: CmpUnit[A]
 }

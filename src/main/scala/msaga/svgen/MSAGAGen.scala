@@ -8,9 +8,11 @@ import org.chipsalliance.cde.config.Config
 object MSAGAGen {
   def main(args: Array[String]): Unit = {
     val genArgs = GenOptions.parseArgs(args)
-    val rowBytes = genArgs.dim * genArgs.elemWidth / 8
-    val rows = 3 * genArgs.dim // Q, K, V
-    val params = MSAGAParams(genArgs.dim, rowBytes * rows, 0)
+    val spRowBytes = genArgs.dim * genArgs.elemWidth / 8
+    val spRows = 3 * genArgs.dim // Q, K, V
+    val accRowBytes = genArgs.dim * genArgs.accWidth / 8
+    val accRows = genArgs.dim + 1
+    val params = MSAGAParams(genArgs.dim, spRowBytes * spRows, accRowBytes * accRows)
     implicit val config: Config = new Config((_, _, _) => {
       case MSAGAKey => params
     })

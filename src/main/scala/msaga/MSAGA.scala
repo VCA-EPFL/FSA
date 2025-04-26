@@ -13,6 +13,13 @@ case class MSAGAParams(
   dim: Int,
   spadSizeBytes: Int,
   accSizeBytes: Int,
+  supportedExecutionPlans: Int => Seq[(UInt, ExecutionPlan)] = {
+    dim => Seq(
+      ISA.Func.LOAD_STATIONARY -> new LoadStationary(dim),
+      ISA.Func.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
+      ISA.Func.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim)
+    )
+  }
 )
 
 trait HasMSAGAParams {
@@ -33,16 +40,20 @@ trait HasMSAGAParams {
 abstract class MSAGABundle(implicit val p: Parameters) extends Bundle with HasMSAGAParams
 abstract class MSAGAModule(implicit val p: Parameters) extends Module with HasMSAGAParams
 
-class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](arithmeticImpl: ArithmeticImpl[E, A])(implicit p: Parameters) extends MSAGAModule {
+class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
+(
+  arithmeticImpl: ArithmeticImpl[E, A]
+)(implicit p: Parameters) extends MSAGAModule {
 
   implicit val ev: ArithmeticImpl[E, A] = arithmeticImpl
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new Instruction))
     val debug_sram_write = Input(new Bundle {
-      val en = Bool()
-      val addr = UInt(SPAD_ROW_ADDR_WIDTH.W)
-      val data = Vec(DIM, arithmeticImpl.elemType)
+      val en_sp = Bool()
+      val en_acc = Bool()
+      val addr = UInt(64.W)
+      val data = Vec(DIM, UInt(64.W))
     })
   })
 
@@ -50,36 +61,56 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](arithmeticImpl: Arit
   val inputDelayer = Module(new InputDelayer(DIM, arithmeticImpl.elemType))
   val outputDelayer = Module(new OutputDelayer(DIM, arithmeticImpl.accType))
   val sa = Module(new SystolicArray[E, A](DIM, DIM))
+  val accumulator = Module(new Accumulator[A](DIM, ev.accType, ev.accMac _))
   val spRAM = SRAM(
     SPAD_ROWS, Vec(DIM, ev.elemType),
     numReadPorts = 1, numWritePorts = 1, numReadwritePorts = 0
   )
-//  val accRAM = SRAM(
-//    ACC_ROWS, Vec(DIM, ev.accType),
-//    numReadPorts = 1, numWritePorts = 1, numReadwritePorts = 0
-//  )
+  val accRAM = SRAM(
+    ACC_ROWS, Vec(DIM, ev.accType),
+    numReadPorts = 1, numWritePorts = 2, numReadwritePorts = 0
+  )
 
   dontTouch(mxControl.io)
   dontTouch(inputDelayer.io)
   dontTouch(outputDelayer.io)
   dontTouch(sa.io)
+  dontTouch(accumulator.io)
   dontTouch(spRAM)
+  dontTouch(accRAM)
 
   mxControl.io.in <> io.inst
 
-  spRAM.writePorts.head.enable := io.debug_sram_write.en
-  spRAM.writePorts.head.address := io.debug_sram_write.addr
-  spRAM.writePorts.head.data := io.debug_sram_write.data
+  spRAM.writePorts.last.enable := io.debug_sram_write.en_sp
+  spRAM.writePorts.last.address := io.debug_sram_write.addr
+  spRAM.writePorts.last.data.zip(io.debug_sram_write.data).foreach { case (a, b) => a := b.asTypeOf(a)}
+
+  accRAM.writePorts.last.enable := io.debug_sram_write.en_acc
+  accRAM.writePorts.last.address := io.debug_sram_write.addr
+  accRAM.writePorts.last.data.zip(io.debug_sram_write.data).foreach{ case (a, b) => a := b.asTypeOf(a)}
 
   spRAM.readPorts.head.enable := mxControl.io.sp_read.valid && !mxControl.io.sp_read.bits.is_constant
   spRAM.readPorts.head.address := mxControl.io.sp_read.bits.addr
 
-  val constSel = RegEnable(mxControl.io.sp_read.bits.addr(ConstGen.width - 1, 0), mxControl.io.sp_read.valid)
-  val constVal = Mux(constSel === ConstGen.Lg2E, ev.elemType.lg2_e, ev.elemType.one)
+  accRAM.readPorts.head.enable := mxControl.io.acc_read.valid && !mxControl.io.acc_read.bits.is_constant
+  accRAM.readPorts.head.address := mxControl.io.acc_read.bits.addr
+
+
+  val constList = VecInit(ev.elemType.one, ev.elemType.lg2_e)
+  val spConstSel = RegEnable(
+    mxControl.io.sp_read.bits.addr(ConstIdx.width - 1, 0),
+    mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
+  )
+  val spConstVal = constList(spConstSel)
+  val accConstSel = RegEnable(
+    mxControl.io.acc_read.bits.const_idx,
+    mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.is_constant
+  )
+  val accConstVal = constList(accConstSel)
 
   inputDelayer.io.in.valid := RegNext(mxControl.io.sp_read.valid, false.B)
   inputDelayer.io.in.bits.data := Mux(RegNext(mxControl.io.sp_read.bits.is_constant),
-    VecInit(Seq.fill(DIM)(constVal)),
+    VecInit(Seq.fill(DIM)(spConstVal)),
     spRAM.readPorts.head.data
   )
   inputDelayer.io.in.bits.rev_input := RegNext(mxControl.io.sp_read.bits.rev_sram_out)
@@ -91,4 +122,15 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](arithmeticImpl: Arit
   sa.io.pe_ctrl := mxControl.io.pe_ctrl
 
   outputDelayer.io.in := VecInit(sa.io.acc_out.map(_.bits))
+
+  accumulator.io.sa_in := outputDelayer.io.out
+  accumulator.io.sram_in := Mux(RegNext(mxControl.io.acc_read.bits.is_constant),
+    VecInit(Seq.fill(DIM)(accConstVal)),
+    accRAM.readPorts.head.data
+  )
+  accumulator.io.ctrl_in := mxControl.io.acc_ctrl
+
+  accRAM.writePorts.head.enable := RegNext(mxControl.io.acc_read.valid, false.B)
+  accRAM.writePorts.head.address := RegNext(mxControl.io.acc_read.bits.addr)
+  accRAM.writePorts.head.data := accumulator.io.sram_out
 }

@@ -85,20 +85,19 @@ class Instruction(SignalWrapper):
         
 
 class SRAMWriteAddr(SignalWrapper):
-    en: int
+    en_sp: int
+    en_acc: int
     addr: int
     def __init__(self, sim: PyVerilator):
         super().__init__(sim, 0)
 
     def reset(self):
-        self.en = 0
+        self.en_sp = 0
+        self.en_acc = 0
         self.addr = 0
 
     def _to_signal_name(self, name: str) -> str:
-        if name in ['en', 'addr']:
-            return f"io_debug_sram_write_{name}"
-        else:
-            raise ValueError(f"Unknown signal name: {name}")
+        return f"io_debug_sram_write_{name}"
 
 
 class SRAMWriteData(SignalWrapper):
@@ -141,27 +140,37 @@ def test_msaga(sim: PyVerilator, dim: int):
     #         sram_write_data[i % 3].data = mat[i % 3, j]
     #     sim.clock.tick()
     for i in range(dim):
-        sram_write_addr.en = 1
+        sram_write_addr.en_sp = 1
         sram_write_addr.addr = i
         for j in range(dim):
             sram_write_data[j].data = data.Q[i, j]
         sim.clock.tick()
 
     for i in range(dim):
-        sram_write_addr.en = 1
+        sram_write_addr.en_sp = 1
         sram_write_addr.addr = dim + i
         for j in range(dim):
             sram_write_data[j].data = data.K.T[i, j]
         sim.clock.tick()
 
     for i in range(dim):
-        sram_write_addr.en = 1
+        sram_write_addr.en_sp = 1
         sram_write_addr.addr = 2 * dim + i
         for j in range(dim):
             sram_write_data[j].data = data.V.T[i, j]
         sim.clock.tick()
 
-    sram_write_addr.en = 0
+    sram_write_addr.en_sp = 0
+    
+    for i in range(dim + 1):
+        sram_write_addr.en_acc = 1
+        sram_write_addr.addr = i
+        for j in range(dim):
+            sram_write_data[j].data = 0
+        sim.clock.tick()
+    
+    sram_write_addr.en_acc = 0
+    
     for _ in range(10):
         sim.clock.tick()
     
@@ -187,7 +196,8 @@ def test_msaga(sim: PyVerilator, dim: int):
         rev_v=False, rev_h=False,
         delay_u=True, delay_d=False
     )
-    inst.set(ATTENTION_SCORE, K_desc.to_rs(), 0)
+    D_desc = MatrixDesc(origin_addr=0, dim=dim, rev_v=False, rev_h=False, delay_u=False, delay_d=False)
+    inst.set(ATTENTION_SCORE, K_desc.to_rs(), D_desc.to_rs())
     sim.clock.tick()
 
     inst.reset()
@@ -200,7 +210,12 @@ def test_msaga(sim: PyVerilator, dim: int):
         rev_v=True, rev_h=False,
         delay_u=False, delay_d=True
     )
-    inst.set(ATTENTION_VALUE, V_desc.to_rs(), 0)
+    O_desc = MatrixDesc(
+        origin_addr=1,
+        dim=1,
+        rev_v=False, rev_h=False, delay_u=False, delay_d=False
+    )
+    inst.set(ATTENTION_VALUE, V_desc.to_rs(), O_desc.to_rs())
     sim.clock.tick()
 
     inst.reset()

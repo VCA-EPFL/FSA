@@ -72,6 +72,8 @@ class Int16Data:
         self.K_padded = pad_matrix_tri_ul_lr(self.K)
         self.S_row_max = np.max(self.S, axis=1)
         self.delta_m = np.iinfo(np.int16).min - self.S_row_max
+        self.delta_m_exp_s1 = 2 * self.delta_m
+        self.delta_m_exp_s2 = 1 + self.delta_m_exp_s1
         self.S_minus_row_max = self.S - self.S.max(axis=1, keepdims=True)
         self.exp_s1 = 2 * self.S_minus_row_max
         self.P = 1 + self.exp_s1
@@ -88,6 +90,8 @@ class Int16Data:
         print_hex("S_row_max", self.S_row_max)
         print_hex("-S_row_max", -self.S_row_max)
         print_hex("delta_m", self.delta_m)
+        print_hex("delta_m_exp_s1", self.delta_m_exp_s1)
+        print_hex("delta_m_exp_s2", self.delta_m_exp_s2)
         print_hex("S_minus_row_max", self.S_minus_row_max)
         print_hex("exp_stage_1", self.exp_s1)
         print_hex("P = exp_stage_2", self.P)

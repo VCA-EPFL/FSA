@@ -30,6 +30,28 @@ object Arithmetic {
       override def lg2_e = 2.S(self.getWidth.W)
     }
   }
+  implicit object FPArithmetic extends Arithmetic[FloatPoint] {
+    import easyfloat.{IEEEFloat, PyFPConst}
+    override implicit def cast(self: FloatPoint): ArithmeticOps[FloatPoint] = new ArithmeticOps[FloatPoint] {
+      override def zero = 0.U.asTypeOf(self)
+      override def one = {
+        val bits = IEEEFloat.expBias(self.expWidth) << self.mantissaWidth
+        bits.U.asTypeOf(self)
+      }
+      override def minimum = {
+        // -inf
+        val sign = BigInt(1) << (self.expWidth + self.mantissaWidth)
+        val exp = ((BigInt(1) << self.expWidth) - 1) << self.mantissaWidth
+        val bits = sign | exp
+        bits.U.asTypeOf(self)
+      }
+      override def lg2_e = PyFPConst.log2e(
+        self.expWidth, self.mantissaWidth,
+        // TODO: any better solutions?
+        projectDir = "generators/easyfloat"
+      ).U.asTypeOf(self)
+    }
+  }
 }
 
 // import this to directly access T.zero / T.minimum
@@ -57,7 +79,7 @@ object CmpCMD {
   def SUB = 1.U(width.W)
 }
 
-abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType: E, accType: A) extends Module {
+abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](val elemType: E, val accType: A) extends Module {
   val io = IO(new Bundle {
     val in_a = Input(elemType) // reg in PE
     val in_b = Input(elemType) // left input
@@ -67,7 +89,7 @@ abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](elemType:
   })
 }
 
-abstract class CmpUnit[A <: Data](accType: A) extends Module {
+abstract class CmpUnit[A <: Data](val accType: A) extends Module {
   val io = IO(new Bundle {
     val in_a = Input(accType)
     val in_b = Input(accType)

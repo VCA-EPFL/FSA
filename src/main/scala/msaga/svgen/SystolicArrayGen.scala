@@ -1,6 +1,7 @@
 package msaga.svgen
 
 import circt.stage.ChiselStage
+import chisel3._
 import msaga.arithmetic.SIntDummyImpl
 import msaga.sa.SystolicArray
 
@@ -10,7 +11,7 @@ object SystolicArrayGen {
     val genArgs = GenOptions.parseArgs(args)
     implicit val ev: SIntDummyImpl = new SIntDummyImpl(genArgs.elemWidth, genArgs.accWidth)
     ChiselStage.emitSystemVerilogFile(
-      new SystolicArray(genArgs.dim, genArgs.dim),
+      new SystolicArray[SInt, SInt](genArgs.dim, genArgs.dim),
       genArgs.chiselArgs.toArray
     )
   }

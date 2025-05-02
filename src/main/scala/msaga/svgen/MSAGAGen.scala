@@ -1,7 +1,7 @@
 package msaga.svgen
 
 import circt.stage._
-import msaga.arithmetic.SIntDummyImpl
+import msaga.arithmetic.{FPArithmeticImpl, SIntDummyImpl}
 import msaga.{MSAGA, MSAGAKey, MSAGAParams}
 import org.chipsalliance.cde.config.Config
 
@@ -18,7 +18,7 @@ object MSAGAGen {
     })
 
     ChiselStage.emitSystemVerilogFile(
-      new MSAGA(new SIntDummyImpl(genArgs.elemWidth, genArgs.accWidth)),
+      new MSAGA(new FPArithmeticImpl(8, 23, 8, 23)),
       genArgs.chiselArgs.toArray
     )
   }

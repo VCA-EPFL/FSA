@@ -1,102 +1,275 @@
 import numpy as np
+from pyeasyfloat.float import FloatPoint
+from pyeasyfloat.rounding import round_raw_float
+from pyeasyfloat.backend import BaseFPBackend, PyEasyFloatBackend
 
-def print_hex_vec(vec: np.ndarray):
-    assert len(vec.shape) == 1
-    print("  [" + "  ".join(f"{np.uint16(x):04x}" for x in vec) + "]")
+type Matrix = list[list[FloatPoint]]
 
-def print_hex(name: str, matrix: np.ndarray):
-    print(f"{name} (shape {matrix.shape}):")
-    if len(matrix.shape) == 2:
-        for row in matrix:
-            print_hex_vec(row)
-        print()
-    elif len(matrix.shape) == 1:
-        print_hex_vec(matrix)
-        print()
+def mat_hex_str(mat: Matrix) -> str:
+        s = ''
+        for row in mat:
+            for e in row:
+                l = (1 + e.ew + e.mw + 1) // 4
+                s += format(e.to_bits(), f"0{l}x")
+                s += ' '
+            s += '\n'
+        return s
 
-def pad_matrix_tri_ur_ll(matrix: np.ndarray) -> np.ndarray:
-    """
-    x x  ->  x x 0
-    x x      0 x x
-    """
-    ret = []
-    for row in range(matrix.shape[0]):
-        ret.append([0 for _ in range(row)] + list(matrix[row]) + [0 for _ in range(matrix.shape[0] - row - 1)])
-    return np.array(ret, dtype=matrix.dtype)
+def mat_to_numpy_array(mat: Matrix) -> np.ndarray:
+        return np.array([
+            [np.uint64(round_raw_float(x.to_raw(), 11, 52).to_bits()).view(np.float64) for x in row]
+            for row in mat
+        ])
 
-def pad_matrix_tri_ul_lr(matrix: np.ndarray) -> np.ndarray:
-    """
-    x x   -> 0 x x
-    x x      x x 0
-    """
-    ret = []
-    for row in range(matrix.shape[0]):
-        ret.append([0 for _ in range(matrix.shape[0] - row - 1)] + list(matrix[row]) + [0 for _ in range(row)])
-    return np.array(ret, dtype=matrix.dtype)
-
-def reverse_matrix_horizontally(matrix: np.ndarray) -> np.ndarray:
-    """
-    x y  ->  y x
-    m n      n m
-    """
-    ret = []
-    for row in matrix:
-        ret.append(list(reversed(row)))
-    return np.array(ret, dtype=matrix.dtype)
-
-def reverse_matrix_vertically(matrix: np.ndarray) -> np.ndarray:
-    """
-    x y  ->  m n
-    m n      x y
-    """
-    ret = []
-    for row in reversed(matrix):
-        ret.append(list(row))
-    return np.array(ret, dtype=matrix.dtype)
-
-class Int16Data:
-    def __init__(self, dim: int, range: tuple, seed: int = 0):
-        self.dim = dim
-        np.random.seed(seed)
-        self.Q = np.random.randint(
-            *range, size=(dim, dim), dtype=np.int16
-        )
-        self.K = np.random.randint(
-            *range, size=(dim, dim), dtype=np.int16
-        )
-        self.V = np.random.randint(
-            *range, size=(dim, dim), dtype=np.int16
-        )
-
-        self.S = np.matmul(self.Q, self.K)
-        self.K_padded = pad_matrix_tri_ul_lr(self.K)
-        self.S_row_max = np.max(self.S, axis=1)
-        self.delta_m = np.iinfo(np.int16).min - self.S_row_max
-        self.delta_m_exp_s1 = 2 * self.delta_m
-        self.delta_m_exp_s2 = 1 + self.delta_m_exp_s1
-        self.S_minus_row_max = self.S - self.S.max(axis=1, keepdims=True)
-        self.exp_s1 = 2 * self.S_minus_row_max
-        self.P = 1 + self.exp_s1
-        self.exp_sum = np.sum(self.P, axis=1)
-        self.O = np.matmul(self.P, self.V)
-        self.V_padded = pad_matrix_tri_ur_ll(reverse_matrix_vertically(self.V))
+def np_to_fp(x: np.float16 | np.float32 | np.float64, ew: int, mw: int) -> FloatPoint:
+    match x.dtype:
+        case np.float16:
+            np_ew, np_mw, ut = 5, 11, np.uint16
+        case np.float32:
+            np_ew, np_mw, ut = 8, 23, np.uint32
+        case np.float64:
+            np_ew, np_mw, ut = 11, 52, np.uint64
+        case _:
+            raise ValueError(f"unknown dtype: {x.dtype}")
     
-    def print_data(self):
-        print_hex("Q", self.Q)
-        print_hex("Q_transpose", self.Q.T)
-        print_hex("K", self.K)
-        print_hex("S", self.S)
-        print_hex("K_padded", self.K_padded)
-        print_hex("S_row_max", self.S_row_max)
-        print_hex("-S_row_max", -self.S_row_max)
-        print_hex("delta_m", self.delta_m)
-        print_hex("delta_m_exp_s1", self.delta_m_exp_s1)
-        print_hex("delta_m_exp_s2", self.delta_m_exp_s2)
-        print_hex("S_minus_row_max", self.S_minus_row_max)
-        print_hex("exp_stage_1", self.exp_s1)
-        print_hex("P = exp_stage_2", self.P)
-        print_hex("exp_sum", self.exp_sum)
-        print_hex("V", self.V)
-        print_hex("V_padded", self.V_padded)
-        print_hex("O", self.O)
-         
+    fp = FloatPoint.from_bits(x.view(ut), np_ew, np_mw)
+    if (np_ew, np_mw) != (ew, mw):
+        fp = round_raw_float(fp.to_raw(), ew, mw)
+    return fp
+    
+def build_mat_from_numpy(arr: np.ndarray, ew: int, mw: int) -> Matrix:
+        return [[np_to_fp(x, ew, mw) for x in row] for row in arr]
+
+def neg_fp(x: FloatPoint) -> FloatPoint:
+    nx = FloatPoint(x.ew, x.mw)
+    nx.sign = not x.sign
+    nx.exp = x.exp
+    nx.mantissa = x.mantissa
+    return nx
+
+class FlashAttentionTile:
+    backend: BaseFPBackend
+
+    Q: Matrix # [Br, d]
+    K: Matrix # [Bc, d]
+    V: Matrix # [Bc, d]
+
+    # S = Q @ K.T [Br, Bc]
+    S: Matrix
+
+    PrevRowMax: Matrix # [Br, 1]
+    RowMaxS: Matrix # [Br, 1]
+    NegRowMaxS: Matrix # [Br, 1]
+    # RowMax(i-1) - RowMax(i)
+    DeltaRowMax: Matrix # [Br, 1]
+    ExpDeltaRowMaxS1: Matrix # [Br, 1]
+    ExpDeltaRowMaxS2: Matrix #[Br, 1]
+    
+    SMinusRowMax: Matrix # [Br, Bc]
+    SExpStage1: Matrix # [Br, Bc]
+    P: Matrix # [Br, Bc]
+    RowSum: Matrix # [Br, 1]
+
+    O: Matrix # [Br, d]
+
+    AccRowSum: Matrix # [Br, 1]
+    AccO: Matrix # [Br, d]
+
+
+
+    def __init__(self,
+                 Q: np.ndarray, K: np.ndarray, V: np.ndarray,
+                 PrevRowMax: np.ndarray, PrevRowSum: np.ndarray, PrevO: np.ndarray,
+                 mul_ew: int, mul_mw: int, acc_ew: int, acc_mw: int,
+                 backend: BaseFPBackend
+                ):
+        self.backend = backend
+        self.Q = build_mat_from_numpy(Q, mul_ew, mul_mw)
+        self.K = build_mat_from_numpy(K, mul_ew, mul_mw)
+        self.V = build_mat_from_numpy(V, mul_ew, mul_mw)
+        self.PrevRowMax = build_mat_from_numpy(PrevRowMax, acc_ew, acc_mw)
+        self.AccRowSum = build_mat_from_numpy(PrevRowSum, acc_ew, acc_mw)
+        self.AccO = build_mat_from_numpy(PrevO, acc_ew, acc_mw)
+        br, d, bc = len(Q), len(Q[0]), len(K)
+        # [Br, Bc]
+        self.S = [[FloatPoint.from_bits(0, acc_ew, acc_mw) for _ in range(bc)] for _ in range(br)]
+        # [Br, d]
+        self.O = [[FloatPoint.from_bits(0, acc_ew, acc_mw) for _ in range(d)] for _ in range(br)]
+        self.__mul_qk()
+        
+        self.RowMaxS = [[self.__max(self.S[row])] for row in range(br)]
+        self.NegRowMaxS = [[neg_fp(x) for x in row] for row in self.RowMaxS]
+        self.DeltaRowMax = [[self.__sub(self.PrevRowMax[row][0], self.RowMaxS[row][0])] for row in range(br)]
+        # e^((m0 - m1)/sqrt(dk)) = 2^((m0 - m1) * log2(e) / sqrt(dk))
+        self.ExpDeltaRowMaxS1 = [[self.backend.fma(row[0],
+                                                   np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
+                                                   np_to_fp(np.float32(0), acc_ew, acc_mw)
+                                                   )] for row in self.DeltaRowMax]
+        self.ExpDeltaRowMaxS2 = [[self.backend.exp2(row[0], acc_ew, acc_mw)] for row in self.ExpDeltaRowMaxS1]
+
+        self.RowSum = [[np_to_fp(np.float32(0), acc_ew, acc_mw)] for row in range(br)]
+        self.SMinusRowMax = [
+            [self.__sub(self.S[row][col], self.RowMaxS[row][0]) for col in range(bc)]
+            for row in range(br)
+        ]
+        
+        # e^(x/sqrt(dk)) = 2^(x * log2(e) / sqrt(dk))
+        self.SExpStage1 = [
+            [self.backend.fma(
+                self.SMinusRowMax[row][col],
+                np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
+                np_to_fp(np.float32(0), acc_ew, acc_mw)
+            ) for col in range(bc)]
+            for row in range(br)
+        ]
+        
+        self.P = [
+            [ self.backend.exp2(self.SExpStage1[row][col], mul_ew, mul_mw) for col in range(bc)]
+            for row in range(br)
+        ]
+        for row in range(br):
+            for col in range(bc):
+                self.RowSum[row][0] = self.backend.fma(
+                    self.P[row][col],
+                    np_to_fp(np.float32(1), mul_ew, mul_mw),
+                    self.RowSum[row][0]
+                )
+        self.__mul_pv()
+        self.__update_global()
+    
+    
+    def __sub(self, a: FloatPoint, b: FloatPoint) -> FloatPoint:
+        """a - b"""
+        one = np_to_fp(np.float64(1), a.ew, a.mw)
+        return self.backend.fma(a, one, neg_fp(b))
+        
+    def __max(self, row: list[FloatPoint]) -> FloatPoint:
+        m = row[0]
+        for e in row[1:]:
+            # m - e
+            diff = self.__sub(m, e)
+            if diff.sign:
+                m = e
+        return m
+            
+    def __mul_qk(self):
+        # [Br, d] @ [Bc, d].T => [Br, Bc]
+        br, dq = len(self.Q), len(self.Q[0])
+        bc, dk = len(self.K), len(self.K[0])
+        assert dq == dk
+        for row in range(br):
+            for col in range(bc):
+                for d in reversed(range(dq)):
+                    k = self.K[col][d]
+                    q = self.Q[row][d]
+                    s = self.S[row][col]
+                    self.S[row][col] = self.backend.fma(k, q, s)
+    
+    def __mul_pv(self):
+        br, bc_p = len(self.P), len(self.P[0])
+        bc_v, d = len(self.V), len(self.V[0])
+        assert bc_p == bc_v
+        assert bc_p <= d
+
+        for row in range(br):
+            for col in range(d):
+                for i in reversed(range(bc_p)):
+                    v = self.V[i][col]
+                    p = self.P[row][i]
+                    o = self.O[row][col]
+                    self.O[row][col] = self.backend.fma(p, v, o)
+
+    def __update_global(self):
+        for row in range(len(self.RowSum)):
+            old_d = self.AccRowSum[row][0]
+            new_d = self.RowSum[row][0]
+            scale = self.ExpDeltaRowMaxS2[row][0]
+            self.AccRowSum[row][0] = self.backend.fma(old_d, scale, new_d)
+            for col in range(len(self.O[0])):
+                old_o = self.AccO[row][col]
+                new_o = self.O[row][col]
+                self.AccO[row][col] = self.backend.fma(old_o, scale, new_o)
+
+    def __str__(self):
+        return f"""
+Q hex:
+{mat_hex_str(self.Q)}
+Q float:
+{str(mat_to_numpy_array(self.Q))}
+
+K hex:
+{mat_hex_str(self.K)}
+K float:
+{str(mat_to_numpy_array(self.K))}
+
+S hex:
+{mat_hex_str(self.S)}
+S float:
+{str(mat_to_numpy_array(self.S))}
+
+PrevRowMax hex:
+{mat_hex_str(self.PrevRowMax)}
+PrevRowMax float:
+{str(mat_to_numpy_array(self.PrevRowMax))}
+
+RowMaxS hex:
+{mat_hex_str(self.RowMaxS)}
+RowMaxS float:
+{str(mat_to_numpy_array(self.RowMaxS))}
+
+-RowMaxS hex:
+{mat_hex_str(self.NegRowMaxS)}
+-RowMaxS float:
+{str(mat_to_numpy_array(self.NegRowMaxS))}
+
+DeltaRowMax hex:
+{mat_hex_str(self.DeltaRowMax)}
+DeltaRowMax float:
+{str(mat_to_numpy_array(self.DeltaRowMax))}
+
+ExpDeltaRowMaxS1 hex:
+{mat_hex_str(self.ExpDeltaRowMaxS1)}
+ExpDeltaRowMaxS1 float:
+{str(mat_to_numpy_array(self.ExpDeltaRowMaxS1))}
+
+ExpDeltaRowMaxS2 hex:
+{mat_hex_str(self.ExpDeltaRowMaxS2)}
+ExpDeltaRowMaxS2 float:
+{str(mat_to_numpy_array(self.ExpDeltaRowMaxS2))}
+
+SMinusRowMax hex:
+{mat_hex_str(self.SMinusRowMax)}
+SMinusRowMax float:
+{str(mat_to_numpy_array(self.SMinusRowMax))}
+
+SExpS1 hex:
+{mat_hex_str(self.SExpStage1)}
+SExpS1 float:
+{str(mat_to_numpy_array(self.SExpStage1))}
+
+P hex:
+{mat_hex_str(self.P)}
+P float:
+{str(mat_to_numpy_array(self.P))}
+
+RowSum hex:
+{mat_hex_str(self.RowSum)}
+RowSum float:
+{str(mat_to_numpy_array(self.RowSum))}
+
+
+O hex:
+{mat_hex_str(self.O)}
+O float:
+{str(mat_to_numpy_array(self.O))}
+
+AccRowSum hex:
+{mat_hex_str(self.AccRowSum)}
+AccRowSum float:
+{str(mat_to_numpy_array(self.AccRowSum))}
+
+AccO hex:
+{mat_hex_str(self.AccO)}
+AccO float:
+{str(mat_to_numpy_array(self.AccO))}
+"""

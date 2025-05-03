@@ -3,12 +3,14 @@ name = "python"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.2.5",
+    "pyeasyfloat>=0.1.0",
     "pyverilator",
     "torch==2.6",
 ]
 
 [tool.uv.sources]
 pyverilator = { git = "https://github.com/ljwljwljwljw/pyverilator.git", rev = "master" }
+pyeasyfloat = { path = "../../easyfloat"}

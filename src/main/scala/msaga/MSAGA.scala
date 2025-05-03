@@ -40,6 +40,17 @@ trait HasMSAGAParams {
 abstract class MSAGABundle(implicit val p: Parameters) extends Bundle with HasMSAGAParams
 abstract class MSAGAModule(implicit val p: Parameters) extends Module with HasMSAGAParams
 
+// allow SRAMs read/write by external driver
+class DebugSRAMIO(dim: Int) extends Bundle {
+  val en_sp = Input(Bool())
+  val en_acc = Input(Bool())
+  val write = Input(Bool())
+  val read = Input(Bool())
+  val addr = Input(UInt(64.W))
+  val wdata = Input(Vec(dim, UInt(64.W)))
+  val rdata = Output(Vec(dim, UInt(64.W)))
+}
+
 class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 (
   arithmeticImpl: ArithmeticImpl[E, A]
@@ -49,12 +60,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new Instruction))
-    val debug_sram_write = Input(new Bundle {
-      val en_sp = Bool()
-      val en_acc = Bool()
-      val addr = UInt(64.W)
-      val data = Vec(DIM, UInt(64.W))
-    })
+    val debug_sram_io = new DebugSRAMIO(DIM)
   })
 
   val mxControl = Module(new MatrixEngineController)
@@ -64,11 +70,11 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   val accumulator = Module(new Accumulator[A](DIM, DIM, ev.accType, ev.accMac _))
   val spRAM = SRAM(
     SPAD_ROWS, Vec(DIM, ev.elemType),
-    numReadPorts = 1, numWritePorts = 1, numReadwritePorts = 0
+    numReadPorts = 2, numWritePorts = 2, numReadwritePorts = 0
   )
   val accRAM = SRAM(
     ACC_ROWS, Vec(DIM, ev.accType),
-    numReadPorts = 1, numWritePorts = 2, numReadwritePorts = 0
+    numReadPorts = 2, numWritePorts = 2, numReadwritePorts = 0
   )
 
   dontTouch(mxControl.io)
@@ -81,13 +87,32 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   mxControl.io.in <> io.inst
 
-  spRAM.writePorts.last.enable := io.debug_sram_write.en_sp
-  spRAM.writePorts.last.address := io.debug_sram_write.addr
-  spRAM.writePorts.last.data.zip(io.debug_sram_write.data).foreach { case (a, b) => a := b.asTypeOf(a)}
+  // TODO: connect with DMA
+  spRAM.writePorts.head.enable := false.B
+  spRAM.writePorts.head.address := DontCare
+  spRAM.writePorts.head.data := DontCare
 
-  accRAM.writePorts.last.enable := io.debug_sram_write.en_acc
-  accRAM.writePorts.last.address := io.debug_sram_write.addr
-  accRAM.writePorts.last.data.zip(io.debug_sram_write.data).foreach{ case (a, b) => a := b.asTypeOf(a)}
+
+  spRAM.writePorts.last.enable := io.debug_sram_io.en_sp && io.debug_sram_io.write
+  spRAM.writePorts.last.address := io.debug_sram_io.addr
+  spRAM.writePorts.last.data.zip(io.debug_sram_io.wdata).foreach { case (a, b) => a := b.asTypeOf(a)}
+
+  accRAM.writePorts.last.enable := io.debug_sram_io.en_acc && io.debug_sram_io.write
+  accRAM.writePorts.last.address := io.debug_sram_io.addr
+  accRAM.writePorts.last.data.zip(io.debug_sram_io.wdata).foreach{ case (a, b) => a := b.asTypeOf(a)}
+
+  spRAM.readPorts.last.enable := io.debug_sram_io.en_sp && io.debug_sram_io.read
+  spRAM.readPorts.last.address := io.debug_sram_io.addr
+
+  accRAM.readPorts.last.enable := io.debug_sram_io.en_acc && io.debug_sram_io.read
+  accRAM.readPorts.last.address := io.debug_sram_io.addr
+
+  io.debug_sram_io.rdata.zipWithIndex.foreach{ case (io_rd, i) =>
+    io_rd := Mux(RegNext(io.debug_sram_io.en_sp),
+      spRAM.readPorts.last.data(i).asUInt,
+      accRAM.readPorts.last.data(i).asUInt
+    )
+  }
 
   spRAM.readPorts.head.enable := mxControl.io.sp_read.valid && !mxControl.io.sp_read.bits.is_constant
   spRAM.readPorts.head.address := mxControl.io.sp_read.bits.addr

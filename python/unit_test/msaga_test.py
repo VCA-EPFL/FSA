@@ -4,6 +4,7 @@ import argparse
 import numpy as np
 from data import *
 from dataclasses import dataclass
+from pyeasyfloat.backend import BaseFPBackend, PyEasyFloatBackend, HwBackend
 
 class MatrixDesc:
     origin_addr: int
@@ -38,8 +39,6 @@ class MatrixDesc:
             else:
                 self.revIn = False
                 self.revOut = False
-                
-     
 
     def to_rs(self) -> int:
         hi = (self.addr << 8) | self.stride & 0xff
@@ -82,12 +81,12 @@ class Instruction(SignalWrapper):
         self.rs1 = rs1
         self.rs2 = rs2
 
-        
-
-class SRAMWriteAddr(SignalWrapper):
+class SRAMAddr(SignalWrapper):
     en_sp: int
     en_acc: int
     addr: int
+    read: int
+    write: int
     def __init__(self, sim: PyVerilator):
         super().__init__(sim, 0)
 
@@ -95,81 +94,91 @@ class SRAMWriteAddr(SignalWrapper):
         self.en_sp = 0
         self.en_acc = 0
         self.addr = 0
+        self.read = 0
+        self.write = 0
 
     def _to_signal_name(self, name: str) -> str:
-        return f"io_debug_sram_write_{name}"
+        return f"io_debug_sram_io_{name}"
 
 
-class SRAMWriteData(SignalWrapper):
-    data: int
+class SRAMData(SignalWrapper):
+    rdata: int
+    wdata: int
     def __init__(self, sim, index):
         super().__init__(sim, index)
     
     def reset(self):
-        self.data = 0
+        self.wdata = 0
     
     def _to_signal_name(self, name: str) -> str:
-        if name == 'data':
-            return f"io_debug_sram_write_data_{self.index}"
-        else:
-            raise ValueError(f"Unknown signal name: {name}")
+        return f"io_debug_sram_io_{name}_{self.index}"
 
 
 def test_msaga(sim: PyVerilator, dim: int):
     inst = Instruction(sim)
-    sram_write_addr = SRAMWriteAddr(sim)
-    sram_write_data = [SRAMWriteData(sim, i) for i in range(dim)]
+    sram_addr = SRAMAddr(sim)
+    sram_data = [SRAMData(sim, i) for i in range(dim)]
 
     sim.start_vcd_trace(PyVerilator.default_vcd_filename)
     sim.io.reset = 1
     sim.clock.tick()
+    
+    np.random.seed(0)
+    
+    Q = np.random.random((dim, dim)).astype(np.float32)
+    K = np.random.random((dim, dim)).astype(np.float32)
+    V = np.random.random((dim, dim)).astype(np.float32)
+    PrevRowMax = np.full((dim, 1), np.float32(-np.inf))
+    PrevRowSum = np.full((dim, 1), np.float32(0))
+    PrevO = np.full((dim, dim), np.float32(0))
+    
+    tile = FlashAttentionTile(
+        Q, K, V,
+        PrevRowMax, PrevRowSum, PrevO,
+        8, 23, 8, 23, PyEasyFloatBackend()
+    )
+    print(str(tile))
 
     sim.io.reset = 0
-    data = Int16Data(dim, (-100, 100), seed=0)
-    data.print_data()
-    # for i in range(3 * dim):
-    #     sram_write_addr.en = 1
-    #     sram_write_addr.addr = i
-    #     if i < dim:
-    #         mat = data.Q
-    #     elif i < 2 * dim:
-    #         mat = data.K.T
-    #     else:
-    #         mat = data.V.T
-    #     for j in range(dim):
-    #         sram_write_data[i % 3].data = mat[i % 3, j]
-    #     sim.clock.tick()
+    
     for i in range(dim):
-        sram_write_addr.en_sp = 1
-        sram_write_addr.addr = i
+        sram_addr.en_sp = 1
+        sram_addr.write = 1
+        sram_addr.addr = i
         for j in range(dim):
-            sram_write_data[j].data = data.Q[i, j]
+            sram_data[j].wdata = tile.Q[i][j].to_bits()
         sim.clock.tick()
 
     for i in range(dim):
-        sram_write_addr.en_sp = 1
-        sram_write_addr.addr = dim + i
+        sram_addr.en_sp = 1
+        sram_addr.write = 1
+        sram_addr.addr = dim + i
         for j in range(dim):
-            sram_write_data[j].data = data.K.T[i, j]
+            sram_data[j].wdata = tile.K[i][j].to_bits()
         sim.clock.tick()
 
+    V_t = build_mat_from_numpy(V.T, 8, 23)
     for i in range(dim):
-        sram_write_addr.en_sp = 1
-        sram_write_addr.addr = 2 * dim + i
+        sram_addr.en_sp = 1
+        sram_addr.write = 1
+        sram_addr.addr = 2 * dim + i
         for j in range(dim):
-            sram_write_data[j].data = data.V.T[i, j]
+            sram_data[j].wdata = V_t[i][j].to_bits()
         sim.clock.tick()
 
-    sram_write_addr.en_sp = 0
+    sram_addr.en_sp = 0
+    sram_addr.write = 0
     
     for i in range(dim + 1):
-        sram_write_addr.en_acc = 1
-        sram_write_addr.addr = i
+        sram_addr.en_acc = 1
+        sram_addr.write = 1
+        sram_addr.addr = i
         for j in range(dim):
-            sram_write_data[j].data = 0
+            sram_data[j].wdata = 0
         sim.clock.tick()
     
-    sram_write_addr.en_acc = 0
+    sram_addr.en_acc = 0
+    sram_addr.write = 0
     
     for _ in range(10):
         sim.clock.tick()
@@ -221,9 +230,25 @@ def test_msaga(sim: PyVerilator, dim: int):
     inst.reset()
     for _ in range(7 * dim):
         sim.clock.tick()
+
+    dut_O = []
+    for i in range(dim):
+        sram_addr.en_acc = 1
+        sram_addr.read = 1
+        sram_addr.addr = i + 1
+        sim.clock.tick()
+        row = []
+        for j in range(dim):
+            row.append(sram_data[j].rdata)
+        dut_O.append(row)
     
+    sram_addr.en_acc = 0
+    sram_addr.read = 0
+    sim.clock.tick()
 
-
+    dut_O = np.array(dut_O, dtype=np.uint32).view(np.float32).T
+    print(str(dut_O))
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
 import msaga.sa._
+import msaga.utils.Ehr
 
 object ConstIdx {
   def width = 1
@@ -55,7 +56,8 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
     rs2_enq_ptr := rs2_enq_ptr + 1.U
   }
 
-  val valid = RegInit(false.B)
+  // Make valid a EHR to allow back-to-back execution
+  val valid = Ehr(2, Bool(), Some(false.B))
   val computeFlags = allPlans.map(_ => RegInit(false.B))
   val accumFlags = allPlans.map(_ => RegInit(false.B))
   val computeTimer = RegInit(0.U(allPlans.map(_.computeMaxCycle).max.U.getWidth.W))
@@ -137,8 +139,8 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
 
   when(Cat(computeDone).orR) {
     computeTimer := 0.U
-    valid := false.B
-  }.elsewhen(valid){
+    valid.write(0, false.B)
+  }.elsewhen(valid.io.read(0)){
     computeTimer := computeTimer + 1.U
   }
 
@@ -150,7 +152,7 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
   }
 
   when(io.in.fire) {
-    valid := true.B
+    valid.write(1, true.B)
     computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).foreach{ case (((cf, af), plan), func) =>
       val sel = func === io.in.bits.funct7
       cf := sel
@@ -158,11 +160,10 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
         af := sel
       }
     }
-
   }
-  io.in.ready := !valid
+  io.in.ready := !valid.read(1)
 
-  when(valid) {
+  when(valid.read(0)) {
     assert(PopCount(computeFlags) === 1.U)
   }
   assert(PopCount(accumFlags) <= 1.U)

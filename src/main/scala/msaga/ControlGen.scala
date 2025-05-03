@@ -23,16 +23,16 @@ class ControlGen(rows: Int) {
       case _ => effStart + repeat + rows - 1
     }
 
-    def update(array: Array[Array[Boolean]]): Unit = {
+    def update(array: Array[Array[Boolean]], value: Boolean = true): Unit = {
       for (re <- 0 until repeat) {
         for (row <- 0 until rows) {
           direction match {
             case Parallel =>
-              array(row)(effStart + re) = true
+              array(row)(effStart + re) = value
             case Upward =>
-              array(row)(effStart + re + rows - row - 1) = true
+              array(row)(effStart + re + rows - row - 1) = value
             case Downward =>
-              array(row)(effStart + re + row) = true
+              array(row)(effStart + re + row) = value
           }
         }
       }
@@ -78,7 +78,7 @@ class ControlGen(rows: Int) {
     val ret = ListBuffer[FlowRange]()
 
     def check_par(cur_col: Int): Int =
-      tr.view.slice(cur_col, maxCycle)
+      array.view.transpose.slice(cur_col, maxCycle)
         .takeWhile(_.forall(identity)).size
 
     def check_upward(cur_col: Int): Int = {
@@ -105,24 +105,28 @@ class ControlGen(rows: Int) {
       }.getOrElse(maxSpan)
     }
 
-
     var col = 0
     while (col < maxCycle) {
       val par = check_par(col)
       val up = check_upward(col)
       val down = check_downward(col)
-      if (par > 0) {
-        ret += FlowRange(Parallel, col, par)
-        col += par
-      } else if (up > 0) {
-        ret += FlowRange(Upward, col, up)
-        col += up + 1
-      } else if (down > 0) {
-        ret += FlowRange(Downward, col, down)
-        col += down + 1
-      } else {
-        col += 1
+      val (flow, step) = (par, up, down) match {
+        case (0, 0, 0) =>
+          (None, 1)
+        case (p, u, d) if p > u && p > d =>
+          (Some(FlowRange(Parallel, col, par)), par)
+        case (p, u, d) if u > p && u > d =>
+          (Some(FlowRange(Upward, col, up)), up + 1)
+        case (p, u, d) if d > p && d > u =>
+          (Some(FlowRange(Downward, col, down)), down + 1)
+        case _ =>
+          throw new RuntimeException(f"Invalid Execution Plan\n${planStr(execution_plan(flows))}")
       }
+      col += step
+      flow.foreach(f => {
+        ret += f
+        f.update(array, value = false)
+      })
     }
     ret
   }
@@ -160,6 +164,10 @@ class ControlGen(rows: Int) {
     }.transpose.map(xi_list => Cat(xi_list.toSeq).orR).toSeq)
   }
 
+  def planStr(plan: Array[Array[Boolean]]): String = plan.map(row => row.map(b => if (b) 1 else 0))
+    .map(row => row.mkString(" "))
+    .mkString("\n")
+
   private def verify(): Unit = {
     require(finalized)
     val rawPlan = execution_plan(flows)
@@ -167,12 +175,10 @@ class ControlGen(rows: Int) {
     val pass = rawPlan.zip(optPlan).forall { case (a, b) => a.length == b.length && a.sameElements(b) }
 
     if (!pass) {
-      val rawArray = rawPlan.map(row => row.map(b => if (b) 1 else 0))
-      val optArray = optPlan.map(row => row.map(b => if (b) 1 else 0))
       println("Raw Plan:")
-      println(rawArray.map(row => row.mkString(" ")).mkString("\n"))
+      println(planStr(rawPlan))
       println("New Plan:")
-      println(optArray.map(row => row.mkString(" ")).mkString("\n"))
+      println(planStr(optPlan))
       require(false)
     }
   }

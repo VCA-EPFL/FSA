@@ -22,10 +22,21 @@ class Ehr[T <: Data](n: Int, gen: T, init: Option[T]) extends Module {
   val w = io.write.reduceRight((l, r) => Mux(r.valid, r, l))
   reg := Mux(w.valid, w.bits, reg)
 
+  def read(idx: Int): T = io.read(idx)
+  def write(idx: Int, v: T): Unit = {
+    io.write(idx).valid := true.B
+    io.write(idx).bits := v
+  }
+
 }
 
 object Ehr {
   def apply[T <: Data](n: Int, gen: T, init: Option[T] = None) = {
-    Module(new Ehr(n, gen, init))
+    val ehr = Module(new Ehr(n, gen, init))
+    ehr.io.write.foreach{ w =>
+      w.valid := false.B
+      w.bits := DontCare
+    }
+    ehr
   }
 }

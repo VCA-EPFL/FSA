@@ -184,7 +184,7 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   setComparator(2 * dim + 2, 1, CmpControlCmd.PROP_MAX_DIFF)
   readScratchPad(
     2 * dim + 2, 1,
-    Some(ConstRead(ConstIdx.Lg2E, revIn = false, revOut = false, delay = true))
+    Some(ConstRead(ConstIdx.AttentionScale, revIn = false, revOut = false, delay = true))
   )
   // pass down delta_m; compute (s-m) * log2e in place
   flow_ud.flow_down(2 * dim + 3, 1)

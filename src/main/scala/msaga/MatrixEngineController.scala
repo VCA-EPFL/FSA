@@ -8,7 +8,7 @@ import msaga.sa._
 object ConstIdx {
   def width = 1
   def ONE = 0
-  def Lg2E = 1
+  def AttentionScale = 1
 }
 
 trait CanReadConstant {

@@ -20,7 +20,7 @@ class AccumulatorControl extends Bundle {
   val cmd = UInt(AccumulatorCmd.width.W)
 }
 
-class Accumulator[A <: Data : Arithmetic](cols: Int, accType: A, macGen: () => MacUnit[A, A]) extends Module {
+class Accumulator[A <: Data : Arithmetic](rows: Int, cols: Int, accType: A, macGen: () => MacUnit[A, A]) extends Module {
 
   val io = IO(new Bundle {
     val ctrl_in = Flipped(Valid(new AccumulatorControl))
@@ -42,14 +42,14 @@ class Accumulator[A <: Data : Arithmetic](cols: Int, accType: A, macGen: () => M
   val acc = cmd === AccumulatorCmd.ACC
 
   /*
-    * exp s1: scale <- sa_in * lg2e + 0
+    * exp s1: scale <- sa_in * lg2e/sqrt(dk) + 0
     * exp s2: scale <- pow2(scale)
     * accum: out <- scale * sram_in + sa_in
   */
 
   for (((((s, mac), sa_in), sram_in), sram_out) <- scale.zip(macUnit).zip(io.sa_in).zip(io.sram_in).zip(io.sram_out)) {
     mac.io.in_a := Mux(exp_s1, sa_in, s)
-    mac.io.in_b := Mux(exp_s1, accType.lg2_e, sram_in)
+    mac.io.in_b := Mux(exp_s1, accType.attentionScale(rows), sram_in)
     mac.io.in_c := Mux(exp_s1, accType.zero, sa_in)
     mac.io.in_cmd := Mux(exp_s2, MacCMD.EXP2, MacCMD.MAC)
     when(valid && (exp_s1 || exp_s2)) {

@@ -61,7 +61,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   val inputDelayer = Module(new InputDelayer(DIM, arithmeticImpl.elemType))
   val outputDelayer = Module(new OutputDelayer(DIM, arithmeticImpl.accType))
   val sa = Module(new SystolicArray[E, A](DIM, DIM))
-  val accumulator = Module(new Accumulator[A](DIM, ev.accType, ev.accMac _))
+  val accumulator = Module(new Accumulator[A](DIM, DIM, ev.accType, ev.accMac _))
   val spRAM = SRAM(
     SPAD_ROWS, Vec(DIM, ev.elemType),
     numReadPorts = 1, numWritePorts = 1, numReadwritePorts = 0
@@ -96,17 +96,18 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   accRAM.readPorts.head.address := mxControl.io.acc_read.bits.addr
 
 
-  val constList = VecInit(ev.elemType.one, ev.elemType.lg2_e)
+  val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(msagaParams.dim))
   val spConstSel = RegEnable(
     mxControl.io.sp_read.bits.addr(ConstIdx.width - 1, 0),
     mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
   )
-  val spConstVal = constList(spConstSel)
+  val spConstVal = spConstList(spConstSel)
   val accConstSel = RegEnable(
     mxControl.io.acc_read.bits.const_idx,
     mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.is_constant
   )
-  val accConstVal = constList(accConstSel)
+  val accConstList = VecInit(ev.accType.one, ev.accType.attentionScale(msagaParams.dim))
+  val accConstVal = accConstList(accConstSel)
 
   inputDelayer.io.in.valid := RegNext(mxControl.io.sp_read.valid, false.B)
   inputDelayer.io.in.bits.data := Mux(RegNext(mxControl.io.sp_read.bits.is_constant),

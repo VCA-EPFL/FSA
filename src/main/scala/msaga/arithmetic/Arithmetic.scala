@@ -17,7 +17,8 @@ trait ArithmeticOps[T] {
   def zero: T
   def one: T
   def minimum: T
-  def lg2_e: T
+  // log2(e) / sqrt(dk)
+  def attentionScale(dk: Int): T
 }
 
 object Arithmetic {
@@ -26,8 +27,8 @@ object Arithmetic {
       override def zero = 0.S(self.getWidth.W)
       override def one = 1.S(self.getWidth.W)
       override def minimum: SInt = (-(1 << (self.getWidth-1))).S(self.getWidth.W)
-      // FIXME: this is for testing purpose only
-      override def lg2_e = 2.S(self.getWidth.W)
+      // FIXME: just for testing purpose only
+      override def attentionScale(dk: Int) = 1.S(self.getWidth.W)
     }
   }
   implicit object FPArithmetic extends Arithmetic[FloatPoint] {
@@ -45,9 +46,9 @@ object Arithmetic {
         val bits = sign | exp
         bits.U.asTypeOf(self)
       }
-      override def lg2_e = PyFPConst.log2e(
+      override def attentionScale(dk: Int) = PyFPConst.attentionScale(
         self.expWidth, self.mantissaWidth,
-        // TODO: any better solutions?
+        dk = dk,
         projectDir = "generators/easyfloat"
       ).U.asTypeOf(self)
     }
@@ -61,7 +62,7 @@ object ArithmeticSyntax {
     def zero: T = self.zero
     def one: T = self.one
     def minimum: T = self.minimum
-    def lg2_e: T = self.lg2_e
+    def attentionScale(dk: Int): T = self.attentionScale(dk)
   }
 }
 

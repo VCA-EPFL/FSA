@@ -38,16 +38,24 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
     val acc_ctrl = Valid(new AccumulatorControl)
   })
 
-  val rs1 = RegEnable(io.in.bits.rs1.asTypeOf(new MatrixRs(SPAD_ROW_ADDR_WIDTH)), io.in.fire)
-  val rs2 = RegEnable(io.in.bits.rs2.asTypeOf(new MatrixRs(ACC_ROW_ADDR_WIDTH)), io.in.fire)
-
-  val valid = RegInit(false.B)
-
   val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM).unzip
-  for (pl <- allPlans) {
-    println(pl.computeMaxCycle, pl.accumulateMaxCycle)
+
+  val rs1 = RegEnable(io.in.bits.rs1.asTypeOf(new MatrixRs(SPAD_ROW_ADDR_WIDTH)), io.in.fire)
+  // we need to modify the content in the queue, so can not use chisel.util.Queue
+  val rs2_queue = Reg(Vec(2, new MatrixRs(ACC_ROW_ADDR_WIDTH)))
+  val rs2_deq_ptr = RegInit(0.U(1.W))
+  val rs2_enq_ptr = RegInit(0.U(1.W))
+  val rs2 = rs2_queue(rs2_deq_ptr)
+
+  val requireAccum = Cat(planFunc.zip(allPlans).map{ case (func, plan) =>
+    func === io.in.bits.funct7 && (plan.accumulateMaxCycle > 0).B
+  }).orR
+  when(io.in.fire && requireAccum) {
+    rs2_queue(rs2_enq_ptr) := io.in.bits.rs2.asTypeOf(rs2)
+    rs2_enq_ptr := rs2_enq_ptr + 1.U
   }
 
+  val valid = RegInit(false.B)
   val computeFlags = allPlans.map(_ => RegInit(false.B))
   val accumFlags = allPlans.map(_ => RegInit(false.B))
   val computeTimer = RegInit(0.U(allPlans.map(_.computeMaxCycle).max.U.getWidth.W))
@@ -136,6 +144,7 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
 
   when(Cat(accumDone).orR) {
     accumTimer := 0.U
+    rs2_deq_ptr := rs2_deq_ptr + 1.U
   }.elsewhen(Cat(accumFlags).orR) {
     accumTimer := accumTimer + 1.U
   }

@@ -58,19 +58,19 @@ class Instruction(SignalWrapper):
     def __init__(self, sim: PyVerilator):
         super().__init__(sim, 0)
         self.reset()
-    
+
     def reset(self):
         self.valid = 0
         self.funct7 = 0
         self.rs1 = 0
         self.rs2 = 0
-    
+
     def _to_signal_name(self, name: str) -> str:
         if name in ['valid', 'ready']:
             return f"io_inst_{name}"
         else:
             return f"io_inst_bits_{name}"
-    
+
     def set(self,
             func: int,
             rs1: int,
@@ -106,10 +106,10 @@ class SRAMData(SignalWrapper):
     wdata: int
     def __init__(self, sim, index):
         super().__init__(sim, index)
-    
+
     def reset(self):
         self.wdata = 0
-    
+
     def _to_signal_name(self, name: str) -> str:
         return f"io_debug_sram_io_{name}_{self.index}"
 
@@ -122,16 +122,16 @@ def test_msaga(sim: PyVerilator, dim: int):
     sim.start_vcd_trace(PyVerilator.default_vcd_filename)
     sim.io.reset = 1
     sim.clock.tick()
-    
+
     np.random.seed(0)
-    
+
     Q = np.random.random((dim, dim)).astype(np.float32)
     K = np.random.random((dim, dim)).astype(np.float32)
     V = np.random.random((dim, dim)).astype(np.float32)
     PrevRowMax = np.full((dim, 1), np.float32(-np.inf))
     PrevRowSum = np.full((dim, 1), np.float32(0))
     PrevO = np.full((dim, dim), np.float32(0))
-    
+
     tile = FlashAttentionTile(
         Q, K, V,
         PrevRowMax, PrevRowSum, PrevO,
@@ -140,7 +140,7 @@ def test_msaga(sim: PyVerilator, dim: int):
     print(str(tile))
 
     sim.io.reset = 0
-    
+
     for i in range(dim):
         sram_addr.en_sp = 1
         sram_addr.write = 1
@@ -168,7 +168,7 @@ def test_msaga(sim: PyVerilator, dim: int):
 
     sram_addr.en_sp = 0
     sram_addr.write = 0
-    
+
     for i in range(dim + 1):
         sram_addr.en_acc = 1
         sram_addr.write = 1
@@ -176,13 +176,13 @@ def test_msaga(sim: PyVerilator, dim: int):
         for j in range(dim):
             sram_data[j].wdata = 0
         sim.clock.tick()
-    
+
     sram_addr.en_acc = 0
     sram_addr.write = 0
-    
+
     for _ in range(10):
         sim.clock.tick()
-    
+
     while not inst.ready:
         sim.clock.tick()
 
@@ -192,12 +192,11 @@ def test_msaga(sim: PyVerilator, dim: int):
         rev_v=False, rev_h=True,
         delay_u=False, delay_d=False
     )
+    while not inst.ready:
+        sim.clock.tick()
     inst.set(LOAD_STATIONARY, Q_desc.to_rs(), 0)
     sim.clock.tick()
-    
     inst.reset()
-    for _ in range(dim + 5):
-        sim.clock.tick()
 
     K_desc = MatrixDesc(
         origin_addr=dim,
@@ -206,13 +205,13 @@ def test_msaga(sim: PyVerilator, dim: int):
         delay_u=True, delay_d=False
     )
     D_desc = MatrixDesc(origin_addr=0, dim=dim, rev_v=False, rev_h=False, delay_u=False, delay_d=False)
+
+    while not inst.ready:
+        sim.clock.tick()
     inst.set(ATTENTION_SCORE, K_desc.to_rs(), D_desc.to_rs())
     sim.clock.tick()
-
     inst.reset()
-    for _ in range( 7 * dim):
-        sim.clock.tick()
-    
+
     V_desc = MatrixDesc(
         origin_addr=2 * dim,
         dim=dim,
@@ -224,12 +223,16 @@ def test_msaga(sim: PyVerilator, dim: int):
         dim=1,
         rev_v=False, rev_h=False, delay_u=False, delay_d=False
     )
+    while not inst.ready:
+        sim.clock.tick()
     inst.set(ATTENTION_VALUE, V_desc.to_rs(), O_desc.to_rs())
     sim.clock.tick()
-
     inst.reset()
-    for _ in range(7 * dim):
+
+
+    while not inst.ready:
         sim.clock.tick()
+    [sim.clock.tick() for _ in range(3 * dim)]
 
     dut_O = []
     for i in range(dim):
@@ -241,14 +244,14 @@ def test_msaga(sim: PyVerilator, dim: int):
         for j in range(dim):
             row.append(sram_data[j].rdata)
         dut_O.append(row)
-    
+
     sram_addr.en_acc = 0
     sram_addr.read = 0
     sim.clock.tick()
 
     dut_O = np.array(dut_O, dtype=np.uint32).view(np.float32).T
     print(str(dut_O))
-    
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

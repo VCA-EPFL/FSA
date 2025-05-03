@@ -19,7 +19,7 @@ class Ehr[T <: Data](n: Int, gen: T, init: Option[T]) extends Module {
     r
   }
 
-  val w = io.write.reduceRight((r, l) => Mux(r.valid, r, l))
+  val w = io.write.reduceRight((l, r) => Mux(r.valid, r, l))
   reg := Mux(w.valid, w.bits, reg)
 
 }

@@ -3,6 +3,7 @@ package msaga
 import collection.mutable.ListBuffer
 import chisel3._
 import chisel3.util._
+import msaga.arithmetic.HasArithmeticParams
 import msaga.sa._
 import msaga.utils.UIntRangeHelper._
 import org.chipsalliance.cde.config.Parameters
@@ -61,7 +62,7 @@ trait ExecutionPlan {
     }
   }
 
-  case class AccReadDesc(cycle: Int, repeat: Int, const: Option[ConstRead])
+  case class AccReadDesc(cycle: Int, repeat: Int, const: Option[ConstRead], rmw: Boolean)
     extends CanGenerateHw[AccRead] with HasEffRange
   {
     override def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): AccRead = {
@@ -70,6 +71,7 @@ trait ExecutionPlan {
       r.is_constant := const.nonEmpty.B
       r.const_idx := DontCare
       const.foreach(c => r.const_idx := c.idx.U)
+      r.rmw := rmw.B
       r
     }
   }
@@ -103,8 +105,8 @@ trait ExecutionPlan {
     sp_read += SpReadDesc(cycle, repeat, const)
   }
 
-  def readAccRAM(cycle: Int, repeat: Int, const: Option[ConstRead]) = {
-    acc_read += AccReadDesc(cycle, repeat, const)
+  def readAccRAM(cycle: Int, repeat: Int, const: Option[ConstRead], rmw: Boolean = true) = {
+    acc_read += AccReadDesc(cycle, repeat, const, rmw)
   }
 
   def setComparator(cycle: Int, repeat: Int, command: UInt) = {
@@ -131,7 +133,7 @@ trait ExecutionPlan {
 
   def accumulateMaxCycle = Seq(acc_read, acc_ctrl).map(x => maxCycle(x.toSeq)).max
 
-  def computeDone(timer: UInt) = timer === (computeMaxCycle - 1).U
+  def computeDone(timer: UInt) = if (computeMaxCycle == 0) true.B else timer === (computeMaxCycle - 1).U
 
   def accumDone(timer: UInt) = {
     if (accumulateMaxCycle > 0) {
@@ -209,7 +211,7 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   setAccumulator(4 * dim + 4, 1, AccumulatorCmd.EXP_S2)
   // update exp sum
   readAccRAM(4 * dim + 4, 1, None)
-  setAccumulator(4 * dim + 5, 1, AccumulatorCmd.ACC)
+  setAccumulator(4 * dim + 5, 1, AccumulatorCmd.ACC_SA)
 }
 
 class AttentionValueExecPlan(val dim: Int) extends ExecutionPlan {
@@ -223,5 +225,16 @@ class AttentionValueExecPlan(val dim: Int) extends ExecutionPlan {
   // read old O out from accumulator sram
   readAccRAM(2 * dim - 1, dim, None)
   // accumulate, update O
-  setAccumulator(2 * dim, dim, AccumulatorCmd.ACC)
+  setAccumulator(2 * dim, dim, AccumulatorCmd.ACC_SA)
+}
+
+// load one row from AccRAM to accumulator
+class AttentionLseNormScale
+(
+  val dim: Int,
+  ap: HasArithmeticParams
+) extends ExecutionPlan {
+  readAccRAM(0, 1, None, rmw = false)
+  setAccumulator(1, 1, AccumulatorCmd.SET_SCALE)
+  setAccumulator(2, ap.reciprocalLatency, AccumulatorCmd.RECIPROCAL)
 }

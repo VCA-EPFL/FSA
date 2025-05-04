@@ -67,7 +67,6 @@ object ArithmeticSyntax {
 }
 
 
-
 object MacCMD {
   def width = 1
   def MAC = 0.U(width.W)
@@ -99,10 +98,21 @@ abstract class CmpUnit[A <: Data](val accType: A) extends Module {
   })
 }
 
-abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic]{
+trait HasMultiCycleIO { this: Module =>
+  val multiCycleIO = IO(new Bundle {
+    val reciprocal_in_valid = Input(Bool())
+    val reciprocal_out_valid = Output(Bool())
+  })
+}
+
+trait HasArithmeticParams {
+  val reciprocalLatency: Int
+}
+
+abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic] extends HasArithmeticParams {
   def elemType: E
   def accType: A
   def peMac: MacUnit[E, A]
-  def accMac: MacUnit[A, A]
+  def accUnit: MacUnit[A, A] with HasMultiCycleIO
   def accCmp: CmpUnit[A]
 }

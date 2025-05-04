@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
 import msaga.sa._
+import msaga.arithmetic._
 import msaga.utils.Ehr
 
 object ConstIdx {
@@ -26,9 +27,16 @@ class SpRead()(implicit p: Parameters) extends MSAGABundle with CanReadConstant 
 class AccRead()(implicit p: Parameters) extends MSAGABundle with CanReadConstant {
   val addr = UInt(ACC_ROW_ADDR_WIDTH.W)
   val const_idx = UInt(ConstIdx.width.W)
+  // read-modify-write, write back SRAM next cycle if set to 1
+  val rmw = Bool()
 }
 
-class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
+/*
+Pass `ArithmeticImpl` in because some execution plans may vary on it
+*/
+class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
+  impl: ArithmeticImpl[E, A]
+)(implicit p: Parameters) extends MSAGAModule {
 
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(new Instruction))
@@ -39,7 +47,7 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
     val acc_ctrl = Valid(new AccumulatorControl)
   })
 
-  val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM).unzip
+  val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM, impl).unzip
 
   val rs1 = RegEnable(io.in.bits.rs1.asTypeOf(new MatrixRs(SPAD_ROW_ADDR_WIDTH)), io.in.fire)
   // we need to modify the content in the queue, so can not use chisel.util.Queue
@@ -155,16 +163,22 @@ class MatrixEngineController(implicit p: Parameters) extends MSAGAModule {
     valid.write(1, true.B)
     computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).foreach{ case (((cf, af), plan), func) =>
       val sel = func === io.in.bits.funct7
-      cf := sel
+      if (plan.computeMaxCycle > 0) {
+        cf := sel
+      }
       if (plan.accumulateMaxCycle > 0 && plan.accStartCycle == 0) {
         af := sel
       }
     }
   }
-  io.in.ready := !valid.read(1)
+  val accReady = Cat(accumFlags) === 0.U ||
+    Cat(accumDone).orR ||
+    !ISA.Func.wait_for_accumulator(io.in.bits.funct7)
 
-  when(valid.read(0)) {
-    assert(PopCount(computeFlags) === 1.U)
+  io.in.ready := !valid.read(1) && accReady
+
+  when(RegNext(valid.read(0), false.B)) {
+    assert(RegNext(PopCount(computeFlags) <= 1.U))
   }
   assert(PopCount(accumFlags) <= 1.U)
 }

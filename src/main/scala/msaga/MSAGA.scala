@@ -2,7 +2,7 @@ package msaga
 
 import chisel3._
 import chisel3.util._
-import msaga.arithmetic.{Arithmetic, ArithmeticImpl}
+import msaga.arithmetic.{Arithmetic, ArithmeticImpl, HasArithmeticParams}
 import msaga.sa._
 import msaga.arithmetic.ArithmeticSyntax._
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
@@ -13,11 +13,12 @@ case class MSAGAParams(
   dim: Int,
   spadSizeBytes: Int,
   accSizeBytes: Int,
-  supportedExecutionPlans: Int => Seq[(UInt, ExecutionPlan)] = {
-    dim => Seq(
+  supportedExecutionPlans: (Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
+    (dim, ap) => Seq(
       ISA.Func.LOAD_STATIONARY -> new LoadStationary(dim),
       ISA.Func.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
-      ISA.Func.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim)
+      ISA.Func.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim),
+      ISA.Func.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap)
     )
   }
 )
@@ -63,11 +64,11 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val debug_sram_io = new DebugSRAMIO(DIM)
   })
 
-  val mxControl = Module(new MatrixEngineController)
+  val mxControl = Module(new MatrixEngineController(ev))
   val inputDelayer = Module(new InputDelayer(DIM, arithmeticImpl.elemType))
   val outputDelayer = Module(new OutputDelayer(DIM, arithmeticImpl.accType))
   val sa = Module(new SystolicArray[E, A](DIM, DIM))
-  val accumulator = Module(new Accumulator[A](DIM, DIM, ev.accType, ev.accMac _))
+  val accumulator = Module(new Accumulator[A](DIM, DIM, ev.accType, ev.accUnit _))
   val spRAM = SRAM(
     SPAD_ROWS, Vec(DIM, ev.elemType),
     numReadPorts = 2, numWritePorts = 2, numReadwritePorts = 0
@@ -156,7 +157,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   )
   accumulator.io.ctrl_in := mxControl.io.acc_ctrl
 
-  accRAM.writePorts.head.enable := RegNext(mxControl.io.acc_read.valid, false.B)
+  accRAM.writePorts.head.enable := RegNext(mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.rmw, false.B)
   accRAM.writePorts.head.address := RegNext(mxControl.io.acc_read.bits.addr)
   accRAM.writePorts.head.data := accumulator.io.sram_out
 }

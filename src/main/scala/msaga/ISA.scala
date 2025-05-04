@@ -11,6 +11,9 @@ object ISA {
     def LOAD_STATIONARY = 0.U
     def ATTENTION_SCORE_COMPUTE = 1.U
     def ATTENTION_VALUE_COMPUTE = 2.U
+    def ATTENTION_LSE_NORM_SCALE = 3.U
+
+    def wait_for_accumulator(func: UInt): Bool = func === ATTENTION_LSE_NORM_SCALE
   }
 }
 

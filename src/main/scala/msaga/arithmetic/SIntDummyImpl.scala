@@ -25,7 +25,11 @@ class SIntDummyImpl(ew: Int, aw: Int) extends ArithmeticImpl[SInt, SInt]{
 
   override def peMac: MacUnit[SInt, SInt] = new SIntMacUnit(ew, aw)
 
-  override def accMac: MacUnit[SInt, SInt] = new SIntMacUnit(aw, aw)
+  override def accUnit: MacUnit[SInt, SInt] with HasMultiCycleIO = new SIntMacUnit(aw, aw) with HasMultiCycleIO {
+    multiCycleIO <> DontCare
+  }
 
   override def accCmp: CmpUnit[SInt] = new SIntCmpUnit(aw)
+
+  override val reciprocalLatency: Int = 1
 }

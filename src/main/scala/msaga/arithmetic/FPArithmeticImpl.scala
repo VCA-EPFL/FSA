@@ -1,6 +1,7 @@
 package msaga.arithmetic
 
 import chisel3._
+import chisel3.util._
 import easyfloat._
 import ArithmeticSyntax._
 
@@ -31,6 +32,22 @@ class FPMacUnit(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int =
   io.out := Rounding.round(mulAddExp2.io.out, RoundingMode.RNE, addEW, addMW).asTypeOf(accType)
 }
 
+class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int = 8) extends
+  FPMacUnit(addEW, addMW, addEW, addMW, pwlPieces) with HasMultiCycleIO
+{
+  val reciprocal = Module(new Reciprocal(addEW, addMW))
+  reciprocal.io.in := io.in_a.asUInt
+  reciprocal.io.in_valid := multiCycleIO.reciprocal_in_valid
+  reciprocal.io.fma_rounded_result := io.out.asUInt
+  mulAddExp2.io.in_exp2 := !reciprocal.io.in_valid && io.in_cmd === MacCMD.EXP2
+  when(reciprocal.io.in_valid) {
+    mulAddExp2.io.in_a := reciprocal.io.fma_rawA
+    mulAddExp2.io.in_b := reciprocal.io.fma_rawB
+    mulAddExp2.io.in_c := reciprocal.io.fma_rawC
+  }
+  multiCycleIO.reciprocal_out_valid := reciprocal.io.out.valid
+}
+
 class FPCmpUnit(ew: Int, mw: Int) extends CmpUnit(FloatPoint(ew, mw)) {
   val fma = Module(new FMA(ew, mw, ew, mw))
   val negB = WireInit(io.in_b)
@@ -56,7 +73,9 @@ class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int)
 
   override def peMac: MacUnit[FloatPoint, FloatPoint] = new FPMacUnit(mulEW, mulMW, addEW, addMW)
 
-  override def accMac: MacUnit[FloatPoint, FloatPoint] = new FPMacUnit(addEW, addMW, addEW, addMW)
+  override def accUnit: MacUnit[FloatPoint, FloatPoint] with HasMultiCycleIO = new FPAccUnit(addEW, addMW)
 
   override def accCmp: CmpUnit[FloatPoint] = new FPCmpUnit(addEW, addMW)
+
+  override val reciprocalLatency: Int = Reciprocal.nCycles(addMW)
 }

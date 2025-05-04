@@ -160,8 +160,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   }
 
   when(io.in.fire) {
-    valid.write(1, true.B)
-    computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).foreach{ case (((cf, af), plan), func) =>
+    val set_cf = computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).map{ case (((cf, af), plan), func) =>
       val sel = func === io.in.bits.funct7
       if (plan.computeMaxCycle > 0) {
         cf := sel
@@ -169,7 +168,9 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
       if (plan.accumulateMaxCycle > 0 && plan.accStartCycle == 0) {
         af := sel
       }
+      (plan.computeMaxCycle > 0).B && sel
     }
+    valid.write(1, Cat(set_cf).orR)
   }
   val accReady = Cat(accumFlags) === 0.U ||
     Cat(accumDone).orR ||

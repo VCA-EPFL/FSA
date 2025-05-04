@@ -39,18 +39,17 @@ class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) exte
 
   cmpUnit.io.in_a := Mux(update_new_max, io.d_input.bits, Mux(prop_new_max, zero, oldMax))
   cmpUnit.io.in_b := newMax
-  cmpUnit.io.in_cmd := Mux(update_new_max, CmpCMD.MAX, CmpCMD.SUB)
 
   when(io.in_ctrl.fire) {
     when(update_new_max) {
-      newMax := cmpUnit.io.out
+      newMax := cmpUnit.io.out_max
     }.elsewhen(prop_diff) {
-      oldMax := newMax
+      oldMax := cmpUnit.io.out_max
       newMax := accType.minimum
     }
   }
 
-  io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, io.d_input.bits, cmpUnit.io.out))
+  io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, io.d_input.bits, cmpUnit.io.out_diff))
   io.d_output.valid := io.in_ctrl.valid
   io.out_ctrl := io.in_ctrl
 }

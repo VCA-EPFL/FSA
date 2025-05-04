@@ -93,8 +93,8 @@ abstract class CmpUnit[A <: Data](val accType: A) extends Module {
   val io = IO(new Bundle {
     val in_a = Input(accType)
     val in_b = Input(accType)
-    val in_cmd = Input(UInt(CmpCMD.width.W))
-    val out = Output(accType)
+    val out_max = Output(accType)
+    val out_diff = Output(accType)
   })
 }
 

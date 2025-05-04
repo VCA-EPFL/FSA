@@ -60,7 +60,8 @@ class FPCmpUnit(ew: Int, mw: Int) extends CmpUnit(FloatPoint(ew, mw)) {
     io.in_b, // a - b < 0, max = b
     io.in_a  // a - b > 0, max = a
   )
-  io.out := Mux(io.in_cmd === CmpCMD.MAX, max, fma.io.out.asTypeOf(accType))
+  io.out_max := max
+  io.out_diff := fma.io.out.asTypeOf(accType)
 }
 
 class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int)

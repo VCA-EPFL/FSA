@@ -12,10 +12,8 @@ class SIntMacUnit(elemWidth: Int, accWidth: Int) extends
 }
 
 class SIntCmpUnit(width: Int) extends CmpUnit(SInt(width.W)) {
-  io.out := Mux(io.in_cmd === CmpCMD.MAX,
-    Mux(io.in_a > io.in_b, io.in_a, io.in_b),
-    io.in_a - io.in_b
-  )
+  io.out_max := Mux(io.in_a > io.in_b, io.in_a, io.in_b)
+  io.out_diff := io.in_a - io.in_b
 }
 
 class SIntDummyImpl(ew: Int, aw: Int) extends ArithmeticImpl[SInt, SInt]{

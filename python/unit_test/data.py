@@ -59,6 +59,7 @@ class FlashAttentionTile:
 
     PrevRowMax: Matrix # [Br, 1]
     RowMaxS: Matrix # [Br, 1]
+    AccRowMaxS: Matrix # [Br, 1]
     NegRowMaxS: Matrix # [Br, 1]
     # RowMax(i-1) - RowMax(i)
     DeltaRowMax: Matrix # [Br, 1]
@@ -73,13 +74,17 @@ class FlashAttentionTile:
     O: Matrix # [Br, d]
 
     AccRowSum: Matrix # [Br, 1]
+    AccRowSumReciprocal: Matrix # 1 / AccRowSum
     AccO: Matrix # [Br, d]
+    NormO: Matrix
 
 
 
     def __init__(self,
                  Q: np.ndarray, K: np.ndarray, V: np.ndarray,
-                 PrevRowMax: np.ndarray, PrevRowSum: np.ndarray, PrevO: np.ndarray,
+                 PrevRowMax: np.ndarray | Matrix,
+                 PrevRowSum: np.ndarray | Matrix,
+                 PrevO: np.ndarray | Matrix,
                  mul_ew: int, mul_mw: int, acc_ew: int, acc_mw: int,
                  backend: BaseFPBackend
                 ):
@@ -87,9 +92,19 @@ class FlashAttentionTile:
         self.Q = build_mat_from_numpy(Q, mul_ew, mul_mw)
         self.K = build_mat_from_numpy(K, mul_ew, mul_mw)
         self.V = build_mat_from_numpy(V, mul_ew, mul_mw)
-        self.PrevRowMax = build_mat_from_numpy(PrevRowMax, acc_ew, acc_mw)
-        self.AccRowSum = build_mat_from_numpy(PrevRowSum, acc_ew, acc_mw)
-        self.AccO = build_mat_from_numpy(PrevO, acc_ew, acc_mw)
+        
+        if isinstance(PrevRowMax, list):
+            self.PrevRowMax = PrevRowMax
+        else:
+            self.PrevRowMax = build_mat_from_numpy(PrevRowMax, acc_ew, acc_mw)
+        if isinstance(PrevRowSum, list):
+            self.AccRowSum = PrevRowSum
+        else:
+            self.AccRowSum = build_mat_from_numpy(PrevRowSum, acc_ew, acc_mw)
+        if isinstance(PrevO, list):
+            self.AccO = PrevO
+        else:
+            self.AccO = build_mat_from_numpy(PrevO, acc_ew, acc_mw)
         br, d, bc = len(Q), len(Q[0]), len(K)
         # [Br, Bc]
         self.S = [[FloatPoint.from_bits(0, acc_ew, acc_mw) for _ in range(bc)] for _ in range(br)]
@@ -100,6 +115,9 @@ class FlashAttentionTile:
         self.RowMaxS = [[self.__max(self.S[row])] for row in range(br)]
         self.NegRowMaxS = [[neg_fp(x) for x in row] for row in self.RowMaxS]
         self.DeltaRowMax = [[self.__sub(self.PrevRowMax[row][0], self.RowMaxS[row][0])] for row in range(br)]
+        self.AccRowMaxS = [[
+            self.RowMaxS[row][0] if self.DeltaRowMax[row][0].sign else self.PrevRowMax[row][0]
+        ] for row in range(br)]
         # e^((m0 - m1)/sqrt(dk)) = 2^((m0 - m1) * log2(e) / sqrt(dk))
         self.ExpDeltaRowMaxS1 = [[self.backend.fma(row[0],
                                                    np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
@@ -180,15 +198,25 @@ class FlashAttentionTile:
                     self.O[row][col] = self.backend.fma(p, v, o)
 
     def __update_global(self):
+        self.AccRowSumReciprocal = []
+        self.NormO = []
         for row in range(len(self.RowSum)):
             old_d = self.AccRowSum[row][0]
             new_d = self.RowSum[row][0]
             scale = self.ExpDeltaRowMaxS2[row][0]
             self.AccRowSum[row][0] = self.backend.fma(old_d, scale, new_d)
+            accRowSumReciprocal = self.backend.reciprocal(self.AccRowSum[row][0])
+            self.AccRowSumReciprocal.append([accRowSumReciprocal])
+            normORow = []
+            
             for col in range(len(self.O[0])):
                 old_o = self.AccO[row][col]
                 new_o = self.O[row][col]
                 self.AccO[row][col] = self.backend.fma(old_o, scale, new_o)
+                normO = self.backend.fma(self.AccO[row][col], accRowSumReciprocal, FloatPoint.from_bits(0, 8, 23))
+                normORow.append(normO)
+            self.NormO.append(normORow)
+            
 
     def __str__(self):
         return f"""
@@ -268,8 +296,18 @@ AccRowSum hex:
 AccRowSum float:
 {str(mat_to_numpy_array(self.AccRowSum))}
 
+AccRowSumReciprocal hex:
+{mat_hex_str(self.AccRowSumReciprocal)}
+AccRowSumReciprocal float:
+{str(mat_to_numpy_array(self.AccRowSumReciprocal))}
+
 AccO hex:
 {mat_hex_str(self.AccO)}
 AccO float:
 {str(mat_to_numpy_array(self.AccO))}
+
+NormO hex:
+{mat_hex_str(self.NormO)}
+NormO float:
+{str(mat_to_numpy_array(self.NormO))}
 """

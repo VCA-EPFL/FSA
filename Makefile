@@ -2,9 +2,11 @@ BUILD_DIR = ./build
 
 SCALA_SRC = $(shell find ./src/main -name "*.scala")
 
-DIM ?= 3
-ELEM_WIDTH ?= 16
-ACC_WIDTH ?= 16
+DIM ?= 4
+SP_ROWS ?= 128
+ACC_ROWS ?= 8
+ELEM_WIDTH ?= 32
+ACC_WIDTH ?= 32
 
 .PHONY: gen_systolic_array unit_test_systolic_array clean
 
@@ -32,6 +34,8 @@ gen_msaga: $(SCALA_SRC)
 		"runMain msaga.svgen.MSAGAGen \
 			-td $(abspath $(BUILD_DIR)/msaga) \
 			--dim $(DIM) \
+			--sp-rows $(SP_ROWS) \
+		    --acc-rows $(ACC_ROWS) \
 			--elem-width $(ELEM_WIDTH) \
 			--acc-width $(ACC_WIDTH)"
 clean:

@@ -9,10 +9,8 @@ object MSAGAGen {
   def main(args: Array[String]): Unit = {
     val genArgs = GenOptions.parseArgs(args)
     val spRowBytes = genArgs.dim * genArgs.elemWidth / 8
-    val spRows = 3 * genArgs.dim // Q, K, V
     val accRowBytes = genArgs.dim * genArgs.accWidth / 8
-    val accRows = genArgs.dim + 1
-    val params = MSAGAParams(genArgs.dim, spRowBytes * spRows, accRowBytes * accRows)
+    val params = MSAGAParams(genArgs.dim, spRowBytes * genArgs.spRows, accRowBytes * genArgs.accRows)
     implicit val config: Config = new Config((_, _, _) => {
       case MSAGAKey => params
     })

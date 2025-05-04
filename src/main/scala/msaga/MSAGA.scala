@@ -18,7 +18,8 @@ case class MSAGAParams(
       ISA.Func.LOAD_STATIONARY -> new LoadStationary(dim),
       ISA.Func.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
       ISA.Func.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim),
-      ISA.Func.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap)
+      ISA.Func.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap),
+      ISA.Func.ATTENTION_LSE_NORM -> new AttentionLseNorm(dim)
     )
   }
 )

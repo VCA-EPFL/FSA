@@ -1,5 +1,6 @@
 package msaga
 
+import freechips.rocketchip.util.UIntIsOneOf
 import chisel3._
 import chisel3.util._
 
@@ -12,8 +13,9 @@ object ISA {
     def ATTENTION_SCORE_COMPUTE = 1.U
     def ATTENTION_VALUE_COMPUTE = 2.U
     def ATTENTION_LSE_NORM_SCALE = 3.U
+    def ATTENTION_LSE_NORM = 4.U
 
-    def wait_for_accumulator(func: UInt): Bool = func === ATTENTION_LSE_NORM_SCALE
+    def wait_for_accumulator(func: UInt): Bool = func.isOneOf(ATTENTION_LSE_NORM_SCALE, ATTENTION_LSE_NORM)
   }
 }
 

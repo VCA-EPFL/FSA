@@ -228,7 +228,7 @@ class AttentionValueExecPlan(val dim: Int) extends ExecutionPlan {
   setAccumulator(2 * dim, dim, AccumulatorCmd.ACC_SA)
 }
 
-// load one row from AccRAM to accumulator
+// load one row from AccRAM to accumulator and get the reciprocal
 class AttentionLseNormScale
 (
   val dim: Int,
@@ -237,4 +237,10 @@ class AttentionLseNormScale
   readAccRAM(0, 1, None, rmw = false)
   setAccumulator(1, 1, AccumulatorCmd.SET_SCALE)
   setAccumulator(2, ap.reciprocalLatency, AccumulatorCmd.RECIPROCAL)
+}
+
+// perform the final lse norm after each flash attention inner loop
+class AttentionLseNorm(val dim: Int) extends ExecutionPlan {
+  readAccRAM(0, dim, None)
+  setAccumulator(1, dim, AccumulatorCmd.ACC)
 }

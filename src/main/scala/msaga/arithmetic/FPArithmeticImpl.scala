@@ -20,7 +20,7 @@ class FPMacUnit(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int =
 {
   // TODO: avoid hard code projectDir
   val slopes = PyFPConst.slopes(mulEW, mulMW, projectDir = "generators/easyfloat", pieces = pwlPieces)
-  val intercepts = PyFPConst.intercepts(mulEW, mulMW, projectDir = "generators/easyfloat", pieces = pwlPieces)
+  val intercepts = PyFPConst.intercepts(addEW, addMW, projectDir = "generators/easyfloat", pieces = pwlPieces)
   val pwlConst = slopes.zip(intercepts)
   val mulAddExp2 = Module(new RawFloat_MulAddExp2(
     1 + mulEW, 1 + mulMW, 1 + addEW, 1 + addMW, pwlConst

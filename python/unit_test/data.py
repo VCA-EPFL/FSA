@@ -24,7 +24,7 @@ def mat_to_numpy_array(mat: Matrix) -> np.ndarray:
 def np_to_fp(x: np.float16 | np.float32 | np.float64, ew: int, mw: int) -> FloatPoint:
     match x.dtype:
         case np.float16:
-            np_ew, np_mw, ut = 5, 11, np.uint16
+            np_ew, np_mw, ut = 5, 10, np.uint16
         case np.float32:
             np_ew, np_mw, ut = 8, 23, np.uint32
         case np.float64:
@@ -36,6 +36,19 @@ def np_to_fp(x: np.float16 | np.float32 | np.float64, ew: int, mw: int) -> Float
     if (np_ew, np_mw) != (ew, mw):
         fp = round_raw_float(fp.to_raw(), ew, mw)
     return fp
+
+
+def fp_to_np(x: FloatPoint) -> np.float64 | np.float32 | np.float16:
+    if x.ew <= 5 and x.mw <= 10:
+        target_ew, target_mw, itype, dtype = 5, 10, np.uint16, np.float16
+    elif x.ew <= 8 and x.mw <= 23:
+        target_ew, target_mw, itype, dtype = 8, 23, np.uint32, np.float32
+    elif x.ew <= 11 and x.mw <= 52:
+        target_ew, target_mw, itype, dtype = 11, 52, np.uint64, np.float64
+    else:
+        raise ValueError(f"Can not convert x({x.ew}, {x.mw}) to numpy float")
+    return itype(round_raw_float(x.to_raw(), target_ew, target_mw).to_bits()).view(dtype)
+
     
 def build_mat_from_numpy(arr: np.ndarray, ew: int, mw: int) -> Matrix:
         return [[np_to_fp(x, ew, mw) for x in row] for row in arr]
@@ -123,7 +136,9 @@ class FlashAttentionTile:
                                                    np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
                                                    np_to_fp(np.float32(0), acc_ew, acc_mw)
                                                    )] for row in self.DeltaRowMax]
-        self.ExpDeltaRowMaxS2 = [[self.backend.exp2(row[0], acc_ew, acc_mw)] for row in self.ExpDeltaRowMaxS1]
+        self.ExpDeltaRowMaxS2 = [[self.backend.exp2(
+            row[0], acc_ew, acc_mw, acc_ew, acc_mw, acc_ew, acc_mw
+            )] for row in self.ExpDeltaRowMaxS1]
 
         self.RowSum = [[np_to_fp(np.float32(0), acc_ew, acc_mw)] for row in range(br)]
         self.SMinusRowMax = [
@@ -142,7 +157,10 @@ class FlashAttentionTile:
         ]
         
         self.P = [
-            [ self.backend.exp2(self.SExpStage1[row][col], mul_ew, mul_mw) for col in range(bc)]
+            [ self.backend.exp2(
+                self.SExpStage1[row][col],
+                mul_ew, mul_mw, mul_ew, mul_mw, acc_ew, acc_mw
+                ) for col in range(bc)]
             for row in range(br)
         ]
         for row in range(br):

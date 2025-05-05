@@ -172,7 +172,7 @@ def sim_attention_lse_norm(
     inst: Instruction,
     sram_addr: SRAMAddr,
     sram_data: list[SRAMData],
-    dim: int,
+    dim: int, ew: int, mw: int,
     d_addr: int, o_addr: int
 ):
 
@@ -208,18 +208,25 @@ def sim_attention_lse_norm(
         sim.clock.tick()
         row = []
         for j in range(dim):
-            row.append(sram_data[j].rdata)
+            x = FloatPoint.from_bits(sram_data[j].rdata, ew, mw)
+            x = fp_to_np(x)
+            row.append(x)
         dut_O.append(row)
 
     sram_addr.en_acc = 0
     sram_addr.read = 0
     sim.clock.tick()
 
-    dut_O = np.array(dut_O, dtype=np.uint32).view(np.float32).T
+    dut_O = np.array(dut_O).T
     return dut_O
 
 
-def write_sram(dim: int, sram_addr: SRAMAddr, sram_data: list[SRAMData], tile: np.ndarray, base: int, accRAM: bool = False):
+def write_sram(
+        dim: int, ew: int, mw: int,
+        sram_addr: SRAMAddr, sram_data: list[SRAMData],
+        tile: np.ndarray,
+        base: int, accRAM: bool = False
+):
     for i in range(dim):
         if accRAM:
             sram_addr.en_acc = 1
@@ -228,7 +235,7 @@ def write_sram(dim: int, sram_addr: SRAMAddr, sram_data: list[SRAMData], tile: n
         sram_addr.write = 1
         sram_addr.addr = base + i
         for j in range(dim):
-            sram_data[j].wdata = tile[i, j].view(np.uint32)
+            sram_data[j].wdata = np_to_fp(tile[i, j], ew, mw).to_bits()
         sim.clock.tick()
     if accRAM:
         sram_addr.en_acc = 0
@@ -260,8 +267,14 @@ def compare_impls(ref: np.ndarray, impls: list[np.ndarray], impl_nams: list[str]
         print(f'Error of {name} vs standard impl:', err)
 
 
-def test_flash_attention_fp32(sim: PyVerilator, dim: int, blocks: int):
-    """One inner loop of flash attention V2"""
+def test_flash_attention(
+        sim: PyVerilator,
+        dim: int, blocks: int,
+        np_dtype: np.float32 | np.float16,
+        mulEW: int, mulMW: int,
+        addEW: int, addMW: int
+    ):
+    """One outer loop of flash attention V2"""
     inst = Instruction(sim)
     sram_addr = SRAMAddr(sim)
     sram_data = [SRAMData(sim, i) for i in range(dim)]
@@ -272,14 +285,14 @@ def test_flash_attention_fp32(sim: PyVerilator, dim: int, blocks: int):
 
     # 1. prepare data in sram
     np.random.seed(0)
-    Q_i = np.random.random((dim, dim)).astype(np.float32)
-    K = np.random.random((blocks * dim, dim)).astype(np.float32)
-    V = np.random.random((blocks * dim, dim)).astype(np.float32)
+    Q_i = np.random.random((dim, dim)).astype(np_dtype)
+    K = np.random.random((blocks * dim, dim)).astype(np_dtype)
+    V = np.random.random((blocks * dim, dim)).astype(np_dtype)
     K_BLOCKS = np.split(K, blocks, axis=-2)
     V_BLOCKS = np.split(V, blocks, axis=-2)
-    PrevO = np.full((dim, dim), np.float32(0))
-    PrevRowMax = np.full((dim, 1), np.float32(-np.inf))
-    PrevRowSum = np.full((dim, 1), np.float32(0))
+    PrevO = np.full((dim, dim), np_dtype(0))
+    PrevRowMax = np.full((dim, 1), np_dtype(-np.inf))
+    PrevRowSum = np.full((dim, 1), np_dtype(0))
 
     def k_addr(j: int):
         return dim + 2 * dim * j
@@ -294,13 +307,13 @@ def test_flash_attention_fp32(sim: PyVerilator, dim: int, blocks: int):
     d_addr = lambda : 0
     o_addr = lambda : 1
 
-    write_sram(dim, sram_addr, sram_data, Q_i, q_addr())
+    write_sram(dim, mulEW, mulMW, sram_addr, sram_data, Q_i, q_addr())
     for j, (K_j, V_j) in enumerate(zip(K_BLOCKS, V_BLOCKS)):
-        write_sram(dim, sram_addr, sram_data, K_j, k_addr(j))
-        write_sram(dim, sram_addr, sram_data, V_j.T, v_addr(j))
+        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, K_j, k_addr(j))
+        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, V_j.T, v_addr(j))
 
     # we use accRAM row 0 to store exp sum, so O starts from row 1
-    write_sram(dim, sram_addr, sram_data, PrevO.T, 1, accRAM=True)
+    write_sram(dim, addEW, addMW, sram_addr, sram_data, PrevO.T, o_addr(), accRAM=True)
     sim.clock.tick()
 
     # 2. inner loop
@@ -309,17 +322,18 @@ def test_flash_attention_fp32(sim: PyVerilator, dim: int, blocks: int):
         # run hardware verilator simulation
         sim_attention_tile(sim, inst, dim, q_addr(), k_addr(j), v_addr(j), d_addr(), o_addr())
         # run software emulation of a single tile
-        ref_tile = FlashAttentionTile(Q_i, K_j, V_j, PrevRowMax, PrevRowSum, PrevO, 8, 23, 8, 23, backend)
+        ref_tile = FlashAttentionTile(Q_i, K_j, V_j, PrevRowMax, PrevRowSum, PrevO, mulEW, mulMW, addEW, addMW, backend)
         PrevRowMax = ref_tile.AccRowMaxS
         PrevRowSum = ref_tile.AccRowSum
         PrevO = ref_tile.AccO
 
-    dut_res = sim_attention_lse_norm(sim, inst, sram_addr, sram_data, dim, d_addr(), o_addr())
+    dut_res = sim_attention_lse_norm(sim, inst, sram_addr, sram_data, dim, addEW, addMW, d_addr(), o_addr())
 
+    torch_dtype = torch.float32 if np_dtype == np.float32 else torch.float16
     torch_res = np.array(torch.nn.functional.scaled_dot_product_attention(
-        torch.tensor(Q_i, dtype=torch.float32),
-        torch.tensor(K, dtype=torch.float32),
-        torch.tensor(V, dtype=torch.float32)
+        torch.tensor(Q_i, dtype=torch_dtype),
+        torch.tensor(K, dtype=torch_dtype),
+        torch.tensor(V, dtype=torch_dtype)
     ))
 
     standard_res = standard_attention(Q_i, K, V)
@@ -346,6 +360,17 @@ if __name__ == "__main__":
     parser.add_argument("--build-dir", type=str, default="../build/msaga")
     parser.add_argument("--dim", type=int, default=4)
     parser.add_argument("--blocks", type=int, default=16)
+    parser.add_argument("--ref-dtype", choices=['fp16', 'fp32'], default='fp16')
+    parser.add_argument("--mul-ew", type=int, default=5)
+    parser.add_argument("--mul-mw", type=int, default=10)
+    parser.add_argument("--add-ew", type=int, default=5)
+    parser.add_argument("--add-mw", type=int, default=10)
     args = parser.parse_args()
-    sim = PyVerilator.build(args.top_file, [args.src_dir], build_dir=args.build_dir)
-    test_flash_attention_fp32(sim, args.dim, args.blocks)
+    ref_dtype = np.float16 if args.ref_dtype == 'fp16' else np.float32
+    sim = PyVerilator.build(args.top_file, [args.src_dir], build_dir=args.build_dir, make_args=['-j8'])
+    test_flash_attention(
+        sim, args.dim, args.blocks,
+        ref_dtype,
+        args.mul_ew, args.mul_mw,
+        args.add_ew, args.add_mw
+    )

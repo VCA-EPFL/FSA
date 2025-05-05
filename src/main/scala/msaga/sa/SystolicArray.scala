@@ -2,6 +2,7 @@ package msaga.sa
 
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.hierarchy._
 import msaga.arithmetic.ArithmeticSyntax._
 import msaga.arithmetic.{Arithmetic, ArithmeticImpl}
 
@@ -32,7 +33,9 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
   */
 
   val cmp_array = Seq.fill(cols){ Module(new CMP(ev.accType, ev.accCmp _)) }
-  val mesh = Seq.fill(rows) { Seq.fill(cols) { Module(new PE(ev.elemType, ev.accType, ev.peMac _) ) } }
+//  val mesh = Seq.fill(rows) { Seq.fill(cols) { Module(new PE(ev.elemType, ev.accType, ev.peMac _) ) } }
+  val peDef = Definition(new PE(ev.elemType, ev.accType, ev.peMac _))
+  val mesh = Seq.fill(rows) { Seq.fill(cols) { Instance(peDef) } }
   val meshT = mesh.transpose
 
   def pipe_no_reset[T <: Data](in: Valid[T]) = {

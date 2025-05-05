@@ -2,6 +2,7 @@ package msaga.sa
 
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.hierarchy._
 import msaga.arithmetic._
 
 
@@ -27,10 +28,11 @@ class PECtrl extends Bundle {
   )
 }
 
+@instantiable
 class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
 (elemType: E, accType: A, macGen: () => MAC) extends Module
 {
-  val io = IO(new Bundle {
+  @public val io = IO(new Bundle {
     val in_ctrl = Flipped(Valid(new PECtrl))
     val out_ctrl = Valid(new PECtrl)
     val u_input = Flipped(Valid(accType))

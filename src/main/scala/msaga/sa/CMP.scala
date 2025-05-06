@@ -41,11 +41,9 @@ class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) exte
   cmpUnit.io.in_b := newMax
 
   when(io.in_ctrl.fire) {
-    when(update_new_max) {
-      newMax := cmpUnit.io.out_max
-    }.elsewhen(prop_diff) {
+    newMax := cmpUnit.io.out_max
+    when(prop_diff) {
       oldMax := cmpUnit.io.out_max
-      newMax := accType.minimum
     }
   }
 

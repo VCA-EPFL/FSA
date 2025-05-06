@@ -102,6 +102,10 @@ class FlashAttentionTile:
                  backend: BaseFPBackend
                 ):
         self.backend = backend
+        self.mul_ew = mul_ew
+        self.mul_mw = mul_mw
+        self.acc_ew = acc_ew
+        self.acc_mw = acc_mw
         self.Q = build_mat_from_numpy(Q, mul_ew, mul_mw)
         self.K = build_mat_from_numpy(K, mul_ew, mul_mw)
         self.V = build_mat_from_numpy(V, mul_ew, mul_mw)
@@ -124,8 +128,7 @@ class FlashAttentionTile:
         # [Br, d]
         self.O = [[FloatPoint.from_bits(0, acc_ew, acc_mw) for _ in range(d)] for _ in range(br)]
         self.__mul_qk()
-        
-        self.RowMaxS = [[self.__max(self.S[row])] for row in range(br)]
+        self.RowMaxS = [[self.__max(self.S[row] + self.PrevRowMax[row])] for row in range(br)]
         self.NegRowMaxS = [[neg_fp(x) for x in row] for row in self.RowMaxS]
         self.DeltaRowMax = [[self.__sub(self.PrevRowMax[row][0], self.RowMaxS[row][0])] for row in range(br)]
         self.AccRowMaxS = [[
@@ -231,7 +234,7 @@ class FlashAttentionTile:
                 old_o = self.AccO[row][col]
                 new_o = self.O[row][col]
                 self.AccO[row][col] = self.backend.fma(old_o, scale, new_o)
-                normO = self.backend.fma(self.AccO[row][col], accRowSumReciprocal, FloatPoint.from_bits(0, 8, 23))
+                normO = self.backend.fma(self.AccO[row][col], accRowSumReciprocal, FloatPoint.from_bits(0, self.acc_ew, self.acc_mw))
                 normORow.append(normO)
             self.NormO.append(normORow)
             

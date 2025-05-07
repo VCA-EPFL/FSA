@@ -5,6 +5,7 @@ import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
 import msaga.sa._
 import msaga.arithmetic._
+import msaga.isa._
 import msaga.utils.Ehr
 
 object ConstIdx {
@@ -39,7 +40,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
 )(implicit p: Parameters) extends MSAGAModule {
 
   val io = IO(new Bundle {
-    val in = Flipped(Decoupled(new Instruction))
+    val in = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
     val sp_read = Valid(new SpRead)
     val acc_read = Valid(new AccRead())
     val cmp_ctrl = Valid(new CmpControl)
@@ -49,18 +50,18 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
 
   val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM, impl).unzip
 
-  val rs1 = RegEnable(io.in.bits.rs1.asTypeOf(new MatrixRs(SPAD_ROW_ADDR_WIDTH)), io.in.fire)
+  val rs1 = RegEnable(io.in.bits.spad, io.in.fire)
   // we need to modify the content in the queue, so can not use chisel.util.Queue
-  val rs2_queue = Reg(Vec(2, new MatrixRs(ACC_ROW_ADDR_WIDTH)))
+  val rs2_queue = Reg(Vec(2, new MatrixInstructionAcc(ACC_ROW_ADDR_WIDTH)))
   val rs2_deq_ptr = RegInit(0.U(1.W))
   val rs2_enq_ptr = RegInit(0.U(1.W))
   val rs2 = rs2_queue(rs2_deq_ptr)
 
   val requireAccum = Cat(planFunc.zip(allPlans).map{ case (func, plan) =>
-    func === io.in.bits.funct7 && (plan.accumulateMaxCycle > 0).B
+    func === io.in.bits.header.func && (plan.accumulateMaxCycle > 0).B
   }).orR
   when(io.in.fire && requireAccum) {
-    rs2_queue(rs2_enq_ptr) := io.in.bits.rs2.asTypeOf(rs2)
+    rs2_queue(rs2_enq_ptr) := io.in.bits.acc
     rs2_enq_ptr := rs2_enq_ptr + 1.U
   }
 
@@ -161,7 +162,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
 
   when(io.in.fire) {
     val set_cf = computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).map{ case (((cf, af), plan), func) =>
-      val sel = func === io.in.bits.funct7
+      val sel = func === io.in.bits.header.func
       if (plan.computeMaxCycle > 0) {
         cf := sel
       }
@@ -174,7 +175,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   }
   val accReady = Cat(accumFlags) === 0.U ||
     Cat(accumDone).orR ||
-    !ISA.Func.wait_for_accumulator(io.in.bits.funct7)
+    !io.in.bits.header.waitPrevAcc
 
   io.in.ready := !valid.read(1) && accReady
 

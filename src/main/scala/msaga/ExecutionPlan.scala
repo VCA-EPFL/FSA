@@ -4,12 +4,13 @@ import collection.mutable.ListBuffer
 import chisel3._
 import chisel3.util._
 import msaga.arithmetic.HasArithmeticParams
+import msaga.isa._
 import msaga.sa._
 import msaga.utils.UIntRangeHelper._
 import org.chipsalliance.cde.config.Parameters
 
 trait CanGenerateHw[T <: Data] {
-  def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): T
+  def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): T
 }
 
 trait HasEffRange {
@@ -45,10 +46,10 @@ trait ExecutionPlan {
   case class SpReadDesc(cycle: Int, repeat: Int, const: Option[ConstRead]) extends
     CanGenerateHw[SpRead] with HasEffRange
   {
-    override def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): SpRead = {
+    override def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): SpRead = {
       val r = Wire(new SpRead())
-      r.rev_sram_out := rs1.reverseInput
-      r.rev_delayer_out := rs1.reverseOutput
+      r.rev_sram_out := rs1.revInput
+      r.rev_delayer_out := rs1.revOutput
       r.delay_sram_out := rs1.delayOutput
       r.addr := rs1.addr
       r.is_constant := const.nonEmpty.B
@@ -65,7 +66,7 @@ trait ExecutionPlan {
   case class AccReadDesc(cycle: Int, repeat: Int, const: Option[ConstRead], rmw: Boolean)
     extends CanGenerateHw[AccRead] with HasEffRange
   {
-    override def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): AccRead = {
+    override def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): AccRead = {
       val r = Wire(new AccRead())
       r.addr := rs2.addr
       r.is_constant := const.nonEmpty.B
@@ -79,7 +80,7 @@ trait ExecutionPlan {
   case class CmpCtrlDesc(cycle: Int, repeat: Int, command: UInt)
     extends CanGenerateHw[CmpControl] with HasEffRange
   {
-    override def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): CmpControl = {
+    override def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): CmpControl = {
       val ctrl = Wire(new CmpControl)
       ctrl.cmd := command
       ctrl
@@ -89,7 +90,7 @@ trait ExecutionPlan {
   case class AccCtrlDesc(cycle: Int, repeat: Int, command: UInt)
     extends CanGenerateHw[AccumulatorControl] with HasEffRange
   {
-    override def toHardware(rs1: MatrixRs, rs2: MatrixRs)(implicit p: Parameters): AccumulatorControl = {
+    override def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): AccumulatorControl = {
       val ctrl = Wire(new AccumulatorControl)
       ctrl.cmd := command
       ctrl

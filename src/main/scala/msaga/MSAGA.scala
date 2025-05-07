@@ -5,21 +5,22 @@ import chisel3.util._
 import msaga.arithmetic.{Arithmetic, ArithmeticImpl, HasArithmeticParams}
 import msaga.sa._
 import msaga.arithmetic.ArithmeticSyntax._
+import msaga.isa.{ISA, MatrixInstruction}
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
 
 case object MSAGAKey extends Field[MSAGAParams]
 
 case class MSAGAParams(
   dim: Int,
-  spadSizeBytes: Int,
-  accSizeBytes: Int,
+  spadRows: Int,
+  accRows: Int,
   supportedExecutionPlans: (Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
     (dim, ap) => Seq(
-      ISA.Func.LOAD_STATIONARY -> new LoadStationary(dim),
-      ISA.Func.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
-      ISA.Func.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim),
-      ISA.Func.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap),
-      ISA.Func.ATTENTION_LSE_NORM -> new AttentionLseNorm(dim)
+      ISA.MxFunc.LOAD_STATIONARY -> new LoadStationary(dim),
+      ISA.MxFunc.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
+      ISA.MxFunc.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim),
+      ISA.MxFunc.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap),
+      ISA.MxFunc.ATTENTION_LSE_NORM -> new AttentionLseNorm(dim)
     )
   }
 )
@@ -30,10 +31,10 @@ trait HasMSAGAParams {
   def DIM = msagaParams.dim
   def DIM_WIDTH = log2Up(msagaParams.dim)
 
-  def SPAD_ROWS = msagaParams.spadSizeBytes / (2*DIM)
+  def SPAD_ROWS = msagaParams.spadRows
   def SPAD_ROW_ADDR_WIDTH = log2Up(SPAD_ROWS)
 
-  def ACC_ROWS = msagaParams.accSizeBytes / (2*DIM)
+  def ACC_ROWS = msagaParams.accRows
   def ACC_ROW_ADDR_WIDTH = log2Up(ACC_ROWS)
 
   def SRAM_ROW_ADDR_WIDTH = Seq(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH).max
@@ -61,7 +62,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   implicit val ev: ArithmeticImpl[E, A] = arithmeticImpl
 
   val io = IO(new Bundle {
-    val inst = Flipped(Decoupled(new Instruction))
+    val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
     val debug_sram_io = new DebugSRAMIO(DIM)
   })
 

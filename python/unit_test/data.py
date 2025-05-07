@@ -17,7 +17,7 @@ def mat_hex_str(mat: Matrix) -> str:
 
 def mat_to_numpy_array(mat: Matrix) -> np.ndarray:
         return np.array([
-            [np.uint64(round_raw_float(x.to_raw(), 11, 52).to_bits()).view(np.float64) for x in row]
+            [np.uint32(round_raw_float(x.to_raw(), 8, 23).to_bits()).view(np.float32) for x in row]
             for row in mat
         ])
 
@@ -31,7 +31,7 @@ def np_to_fp(x: np.float16 | np.float32 | np.float64, ew: int, mw: int) -> Float
             np_ew, np_mw, ut = 11, 52, np.uint64
         case _:
             raise ValueError(f"unknown dtype: {x.dtype}")
-    
+
     fp = FloatPoint.from_bits(x.view(ut), np_ew, np_mw)
     if (np_ew, np_mw) != (ew, mw):
         fp = round_raw_float(fp.to_raw(), ew, mw)
@@ -49,7 +49,7 @@ def fp_to_np(x: FloatPoint) -> np.float64 | np.float32 | np.float16:
         raise ValueError(f"Can not convert x({x.ew}, {x.mw}) to numpy float")
     return itype(round_raw_float(x.to_raw(), target_ew, target_mw).to_bits()).view(dtype)
 
-    
+
 def build_mat_from_numpy(arr: np.ndarray, ew: int, mw: int) -> Matrix:
         return [[np_to_fp(x, ew, mw) for x in row] for row in arr]
 
@@ -69,6 +69,7 @@ class FlashAttentionTile:
 
     # S = Q @ K.T [Br, Bc]
     S: Matrix
+    S_low_precision: Matrix
 
     PrevRowMax: Matrix # [Br, 1]
     RowMaxS: Matrix # [Br, 1]
@@ -78,7 +79,7 @@ class FlashAttentionTile:
     DeltaRowMax: Matrix # [Br, 1]
     ExpDeltaRowMaxS1: Matrix # [Br, 1]
     ExpDeltaRowMaxS2: Matrix #[Br, 1]
-    
+
     SMinusRowMax: Matrix # [Br, Bc]
     SExpStage1: Matrix # [Br, Bc]
     P: Matrix # [Br, Bc]
@@ -109,7 +110,7 @@ class FlashAttentionTile:
         self.Q = build_mat_from_numpy(Q, mul_ew, mul_mw)
         self.K = build_mat_from_numpy(K, mul_ew, mul_mw)
         self.V = build_mat_from_numpy(V, mul_ew, mul_mw)
-        
+
         if isinstance(PrevRowMax, list):
             self.PrevRowMax = PrevRowMax
         else:
@@ -136,29 +137,35 @@ class FlashAttentionTile:
         ] for row in range(br)]
         # e^((m0 - m1)/sqrt(dk)) = 2^((m0 - m1) * log2(e) / sqrt(dk))
         self.ExpDeltaRowMaxS1 = [[self.backend.fma(row[0],
-                                                   np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
-                                                   np_to_fp(np.float32(0), acc_ew, acc_mw)
+                                                   np_to_fp(np.log2(np.e) / np.sqrt(d), acc_ew, acc_mw),
+                                                   np_to_fp(np.float32(0), acc_ew, acc_mw),
+                                                   acc_ew, acc_mw
                                                    )] for row in self.DeltaRowMax]
         self.ExpDeltaRowMaxS2 = [[self.backend.exp2(
             row[0], acc_ew, acc_mw, acc_ew, acc_mw, acc_ew, acc_mw
             )] for row in self.ExpDeltaRowMaxS1]
 
         self.RowSum = [[np_to_fp(np.float32(0), acc_ew, acc_mw)] for row in range(br)]
+
+        self.S_low_precision = [[round_raw_float(x.to_raw(), mul_ew, mul_mw)
+                                 for x in row] for row in self.S]
+
         self.SMinusRowMax = [
-            [self.__sub(self.S[row][col], self.RowMaxS[row][0]) for col in range(bc)]
+            [self.__sub(self.S_low_precision[row][col], self.RowMaxS[row][0]) for col in range(bc)]
             for row in range(br)
         ]
-        
+
         # e^(x/sqrt(dk)) = 2^(x * log2(e) / sqrt(dk))
         self.SExpStage1 = [
             [self.backend.fma(
                 self.SMinusRowMax[row][col],
                 np_to_fp(np.log2(np.e) / np.sqrt(d), mul_ew, mul_mw),
-                np_to_fp(np.float32(0), acc_ew, acc_mw)
+                np_to_fp(np.float32(0), acc_ew, acc_mw),
+                mul_ew, mul_mw
             ) for col in range(bc)]
             for row in range(br)
         ]
-        
+
         self.P = [
             [ self.backend.exp2(
                 self.SExpStage1[row][col],
@@ -171,17 +178,18 @@ class FlashAttentionTile:
                 self.RowSum[row][0] = self.backend.fma(
                     self.P[row][col],
                     np_to_fp(np.float32(1), mul_ew, mul_mw),
-                    self.RowSum[row][0]
+                    self.RowSum[row][0],
+                    acc_ew, acc_mw
                 )
         self.__mul_pv()
         self.__update_global()
-    
-    
+
+
     def __sub(self, a: FloatPoint, b: FloatPoint) -> FloatPoint:
         """a - b"""
         one = np_to_fp(np.float64(1), a.ew, a.mw)
-        return self.backend.fma(a, one, neg_fp(b))
-        
+        return self.backend.fma(a, one, neg_fp(b), a.ew, a.mw)
+
     def __max(self, row: list[FloatPoint]) -> FloatPoint:
         m = row[0]
         for e in row[1:]:
@@ -190,7 +198,7 @@ class FlashAttentionTile:
             if diff.sign:
                 m = e
         return m
-            
+
     def __mul_qk(self):
         # [Br, d] @ [Bc, d].T => [Br, Bc]
         br, dq = len(self.Q), len(self.Q[0])
@@ -202,8 +210,8 @@ class FlashAttentionTile:
                     k = self.K[col][d]
                     q = self.Q[row][d]
                     s = self.S[row][col]
-                    self.S[row][col] = self.backend.fma(k, q, s)
-    
+                    self.S[row][col] = self.backend.fma(k, q, s, s.ew, s.mw)
+
     def __mul_pv(self):
         br, bc_p = len(self.P), len(self.P[0])
         bc_v, d = len(self.V), len(self.V[0])
@@ -216,7 +224,7 @@ class FlashAttentionTile:
                     v = self.V[i][col]
                     p = self.P[row][i]
                     o = self.O[row][col]
-                    self.O[row][col] = self.backend.fma(p, v, o)
+                    self.O[row][col] = self.backend.fma(p, v, o, o.ew, o.mw)
 
     def __update_global(self):
         self.AccRowSumReciprocal = []
@@ -225,19 +233,23 @@ class FlashAttentionTile:
             old_d = self.AccRowSum[row][0]
             new_d = self.RowSum[row][0]
             scale = self.ExpDeltaRowMaxS2[row][0]
-            self.AccRowSum[row][0] = self.backend.fma(old_d, scale, new_d)
+            self.AccRowSum[row][0] = self.backend.fma(old_d, scale, new_d, old_d.ew, old_d.mw)
             accRowSumReciprocal = self.backend.reciprocal(self.AccRowSum[row][0])
             self.AccRowSumReciprocal.append([accRowSumReciprocal])
             normORow = []
-            
+
             for col in range(len(self.O[0])):
                 old_o = self.AccO[row][col]
                 new_o = self.O[row][col]
-                self.AccO[row][col] = self.backend.fma(old_o, scale, new_o)
-                normO = self.backend.fma(self.AccO[row][col], accRowSumReciprocal, FloatPoint.from_bits(0, self.acc_ew, self.acc_mw))
+                self.AccO[row][col] = self.backend.fma(old_o, scale, new_o, old_o.ew, old_o.mw)
+                normO = self.backend.fma(
+                    self.AccO[row][col], accRowSumReciprocal, FloatPoint.from_bits(0, self.acc_ew, self.acc_mw),
+                    old_o.ew, old_o.mw
+                )
+
                 normORow.append(normO)
             self.NormO.append(normORow)
-            
+
 
     def __str__(self):
         return f"""

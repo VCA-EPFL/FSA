@@ -363,8 +363,8 @@ if __name__ == "__main__":
     parser.add_argument("--ref-dtype", choices=['fp16', 'fp32'], default='fp16')
     parser.add_argument("--mul-ew", type=int, default=5)
     parser.add_argument("--mul-mw", type=int, default=10)
-    parser.add_argument("--add-ew", type=int, default=5)
-    parser.add_argument("--add-mw", type=int, default=10)
+    parser.add_argument("--add-ew", type=int, default=8)
+    parser.add_argument("--add-mw", type=int, default=23)
     args = parser.parse_args()
     ref_dtype = np.float16 if args.ref_dtype == 'fp16' else np.float32
     sim = PyVerilator.build(args.top_file, [args.src_dir], build_dir=args.build_dir, make_args=['-j8'])

@@ -3,30 +3,14 @@ BUILD_DIR = ./build
 SCALA_SRC = $(shell find ./src/main -name "*.scala")
 
 DIM ?= 4
-SP_ROWS ?= 128
+SP_ROWS ?= 256
 ACC_ROWS ?= 8
-ELEM_WIDTH ?= 32
-ACC_WIDTH ?= 32
+MUL_EW ?= 5
+MUL_MW ?= 10
+ADD_EW ?= 8
+ADD_MW ?= 23
 
-.PHONY: gen_systolic_array unit_test_systolic_array clean
-
-gen_systolic_array: $(SCALA_SRC)
-	cd ../.. && sbt \
-		"project msaga" \
-		"runMain msaga.svgen.SystolicArrayGen \
-			-td $(abspath $(BUILD_DIR)/systolic_array) \
-			--dim $(DIM) \
-			--elem-width $(ELEM_WIDTH) \
-			--acc-width $(ACC_WIDTH)"
-
-unit_test_systolic_array: gen_systolic_array
-	cd python && uv run unit_test/sa_test.py \
-		--top-file $(abspath $(BUILD_DIR)/systolic_array/SystolicArray.sv) \
-		--src-dir $(abspath $(BUILD_DIR)/systolic_array) \
-		--build-dir $(abspath $(BUILD_DIR)/systolic_array) \
-		--dim $(DIM) \
-		--elem-width $(ELEM_WIDTH) \
-		--acc-width $(ACC_WIDTH)
+.PHONY: gen_msaga clean
 
 gen_msaga: $(SCALA_SRC)
 	cd ../.. && sbt \
@@ -36,7 +20,9 @@ gen_msaga: $(SCALA_SRC)
 			--dim $(DIM) \
 			--sp-rows $(SP_ROWS) \
 		    --acc-rows $(ACC_ROWS) \
-			--elem-width $(ELEM_WIDTH) \
-			--acc-width $(ACC_WIDTH)"
+			--mul-ew $(MUL_EW) \
+			--mul-mw $(MUL_MW) \
+			--add-ew $(ADD_EW) \
+			--add-mw $(ADD_MW)"
 clean:
 	rm -rf $(BUILD_DIR)

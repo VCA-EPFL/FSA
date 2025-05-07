@@ -32,9 +32,9 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
       PE[row-1,0] -> ...        -> PE[row-1, col-1]
   */
 
-  val cmp_array = Seq.fill(cols){ Module(new CMP(ev.accType, ev.accCmp _)) }
+  val cmp_array = Seq.fill(cols){ Module(new CMP(ev)) }
 //  val mesh = Seq.fill(rows) { Seq.fill(cols) { Module(new PE(ev.elemType, ev.accType, ev.peMac _) ) } }
-  val peDef = Definition(new PE(ev.elemType, ev.accType, ev.peMac _))
+  val peDef = Definition(new PE(ev))
   val mesh = Seq.fill(rows) { Seq.fill(cols) { Instance(peDef) } }
   val meshT = mesh.transpose
 

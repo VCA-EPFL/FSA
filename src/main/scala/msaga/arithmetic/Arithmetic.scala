@@ -85,7 +85,8 @@ abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](val elemT
     val in_b = Input(elemType) // left input
     val in_c = Input(accType) // up/down input
     val in_cmd = Input(UInt(MacCMD.width.W))
-    val out = Output(accType)
+    val out_accType = Output(accType)
+    val out_elemType = Output(elemType)
   })
 }
 
@@ -115,4 +116,7 @@ abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic] ex
   def peMac: MacUnit[E, A]
   def accUnit: MacUnit[A, A] with HasMultiCycleIO
   def accCmp: CmpUnit[A]
+  def viewAasE: A => E
+  def viewEasA: E => A
+  def cvtAtoE: A => E
 }

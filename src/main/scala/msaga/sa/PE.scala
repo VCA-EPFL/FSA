@@ -29,9 +29,10 @@ class PECtrl extends Bundle {
 }
 
 @instantiable
-class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
-(elemType: E, accType: A, macGen: () => MAC) extends Module
+class PE[E <: Data : Arithmetic, A <: Data : Arithmetic]
+(ev: ArithmeticImpl[E, A]) extends Module
 {
+  val (accType, elemType, macGen) = (ev.accType, ev.elemType, ev.peMac _)
   @public val io = IO(new Bundle {
     val in_ctrl = Flipped(Valid(new PECtrl))
     val out_ctrl = Valid(new PECtrl)
@@ -53,10 +54,9 @@ class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
     when(ctrl.load_reg_li) {
       reg := io.l_input.bits
     }.elsewhen(ctrl.load_reg_ui) {
-      reg := io.u_input.bits
+      reg := ev.viewAasE(io.u_input.bits)
     }.elsewhen(ctrl.update_reg || ctrl.exp2) {
-      // FIXME: if macUnit.out is accType, it should be down cast to elemType
-      reg := macUnit.io.out
+      reg := macUnit.io.out_elemType
     }
   }
 
@@ -70,9 +70,9 @@ class PE[E <: Data : Arithmetic, A <: Data : Arithmetic, MAC <: MacUnit[E, A]]
   io.r_output.bits := Mux(ctrl.load_reg_li, reg, io.l_input.bits)
   io.r_output.valid := fire && (ctrl.load_reg_li || ctrl.flow_lr)
 
-  io.d_output.bits := Mux(ctrl.mac && ctrl.acc_ui, macUnit.io.out, io.u_input.bits)
+  io.d_output.bits := Mux(ctrl.mac && ctrl.acc_ui, macUnit.io.out_accType, io.u_input.bits)
   io.d_output.valid := fire && (ctrl.mac && ctrl.acc_ui || ctrl.flow_ud)
 
-  io.u_output.bits := Mux(ctrl.mac && !ctrl.acc_ui, macUnit.io.out, io.d_input.bits)
+  io.u_output.bits := Mux(ctrl.mac && !ctrl.acc_ui, macUnit.io.out_accType, io.d_input.bits)
   io.u_output.valid := fire && (ctrl.mac && !ctrl.acc_ui || ctrl.flow_du)
 }

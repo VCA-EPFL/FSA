@@ -29,7 +29,8 @@ class FPMacUnit(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int =
   mulAddExp2.io.in_b.fromIEEE(io.in_b.asUInt, mulEW, mulMW)
   mulAddExp2.io.in_c.fromIEEE(io.in_c.asUInt, addEW, addMW)
   mulAddExp2.io.in_exp2 := io.in_cmd === MacCMD.EXP2
-  io.out := Rounding.round(mulAddExp2.io.out, RoundingMode.RNE, addEW, addMW).asTypeOf(accType)
+  io.out_accType := Rounding.round(mulAddExp2.io.out, RoundingMode.RNE, addEW, addMW).asTypeOf(accType)
+  io.out_elemType := Rounding.round(mulAddExp2.io.out, RoundingMode.RNE, mulEW, mulMW).asTypeOf(elemType)
 }
 
 class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int = 8) extends
@@ -38,7 +39,7 @@ class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int = 8) extends
   val reciprocal = Module(new Reciprocal(addEW, addMW))
   reciprocal.io.in := io.in_a.asUInt
   reciprocal.io.in_valid := multiCycleIO.reciprocal_in_valid
-  reciprocal.io.fma_rounded_result := io.out.asUInt
+  reciprocal.io.fma_rounded_result := io.out_accType.asUInt
   mulAddExp2.io.in_exp2 := !reciprocal.io.in_valid && io.in_cmd === MacCMD.EXP2
   when(reciprocal.io.in_valid) {
     mulAddExp2.io.in_a := reciprocal.io.fma_rawA
@@ -68,6 +69,10 @@ class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int)
   extends ArithmeticImpl[FloatPoint, FloatPoint]
 {
 
+  require(mulEW <= addEW && mulMW <= addMW)
+
+  val isMixedPrecision = !(mulEW == addEW && mulMW == addMW)
+
   override def elemType: FloatPoint = FloatPoint(mulEW, mulMW)
 
   override def accType: FloatPoint = FloatPoint(addEW, addMW)
@@ -79,4 +84,26 @@ class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int)
   override def accCmp: CmpUnit[FloatPoint] = new FPCmpUnit(addEW, addMW)
 
   override val reciprocalLatency: Int = Reciprocal.nCycles(addMW)
+
+  override def viewAasE: FloatPoint => FloatPoint = { (a: FloatPoint) =>
+    if (isMixedPrecision) {
+      a.asUInt.take(elemType.getWidth).asTypeOf(elemType)
+    } else a
+  }
+
+  override def viewEasA: FloatPoint => FloatPoint = { (e: FloatPoint) =>
+    if (isMixedPrecision) {
+      (0.U((accType.getWidth - elemType.getWidth).W) ## e.asUInt).asTypeOf(accType)
+    } else e
+  }
+
+  override def cvtAtoE: FloatPoint => FloatPoint = { (a: FloatPoint) =>
+    if (isMixedPrecision) {
+      val rawA = Wire(new RawFloat(1 + addEW, 1 + addMW))
+      rawA.fromIEEE(a.asUInt, addEW, addMW)
+      Rounding.round(rawA, RoundingMode.RNE, mulEW, mulMW).asTypeOf(elemType)
+    } else {
+      a
+    }
+  }
 }

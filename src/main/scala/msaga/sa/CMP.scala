@@ -17,7 +17,8 @@ class CmpControl extends Bundle {
   val cmd = UInt(CmpControlCmd.width.W)
 }
 
-class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) extends Module {
+class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, A]) extends Module {
+  val (accType, cmpUnitGen) = (ev.accType, ev.accCmp _)
   val io = IO(new Bundle {
     val d_input = Flipped(Valid(accType))
     val d_output = Valid(accType)
@@ -47,7 +48,8 @@ class CMP[A <: Data : Arithmetic](accType: A, cmpUnitGen: () => CmpUnit[A]) exte
     }
   }
 
-  io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, io.d_input.bits, cmpUnit.io.out_diff))
+  val downCastDIn = ev.viewEasA(ev.cvtAtoE(io.d_input.bits))
+  io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, downCastDIn, cmpUnit.io.out_diff))
   io.d_output.valid := io.in_ctrl.valid
   io.out_ctrl := io.in_ctrl
 }

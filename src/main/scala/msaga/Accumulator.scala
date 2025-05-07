@@ -70,12 +70,12 @@ class Accumulator[A <: Data : Arithmetic]
     acc.multiCycleIO.reciprocal_in_valid := valid && reciprocal
     when(valid) {
       when(exp_s1 || exp_s2 || acc.multiCycleIO.reciprocal_out_valid) {
-        s := acc.io.out
+        s := acc.io.out_accType
       }.elsewhen(set) {
         s := sram_in
       }
     }
-    sram_out := acc.io.out
+    sram_out := acc.io.out_accType
   }
 
 }

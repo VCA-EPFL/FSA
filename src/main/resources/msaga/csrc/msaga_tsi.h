@@ -21,6 +21,7 @@ class msaga_tsi_t : public tsi_t
 
  protected:
   void reset() override;
+  void load_instructions(const std::string& path);
 
  private:
   context_t msaga_host;

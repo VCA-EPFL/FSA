@@ -3,4 +3,4 @@
 .vscode
 obj_dir
 *.vcd
-unit_test/__pycache__
+**/__pycache__

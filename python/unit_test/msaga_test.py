@@ -1,170 +1,33 @@
 import argparse
 import numpy as np
 import torch
-from signal_wrapper import SignalWrapper
 from pyverilator import PyVerilator
-from data import *
+from .data import *
+from .signal_wrapper import *
 from pyeasyfloat.backend import BaseFPBackend, PyEasyFloatBackend, HwBackend
-
-class MatrixDesc:
-    origin_addr: int
-    dim: int
-    rev_v: bool
-    rev_h: bool
-    delay_u: bool
-    delay_d: bool
-
-    def __init__(self,
-                 origin_addr: int, dim: int,
-                    rev_v: bool, rev_h: bool,
-                    delay_u: bool, delay_d: bool):
-
-        self.addr = origin_addr if not rev_h else origin_addr + dim - 1
-        self.stride = 1 if not rev_h else -1
-        self.delay = delay_u or delay_d
-
-        self.revIn = False
-        self.revOut = False
-        if delay_u:
-            if rev_v:
-                self.revIn = True
-                self.revOut = False
-            else:
-                self.revIn = True
-                self.revOut = True
-        elif delay_d:
-            if rev_v:
-                self.revIn = True
-                self.revOut = False
-            else:
-                self.revIn = False
-                self.revOut = False
-
-    def to_rs(self) -> int:
-        hi = (self.addr << 8) | self.stride & 0xff
-        lo = (self.revIn << 31) | (self.revOut << 30) | (self.delay << 29)
-        return (hi << 32) | lo
-
-LOAD_STATIONARY = 0
-ATTENTION_SCORE = 1
-ATTENTION_VALUE = 2
-ATTENTION_LSE_SCALE = 3
-ATTENTION_LSE_NORM = 4
-
-class Instruction(SignalWrapper):
-    valid: int
-    ready: int
-    funct7: int
-    rs1: int
-    rs2: int
-    def __init__(self, sim: PyVerilator):
-        super().__init__(sim, 0)
-        self.reset()
-
-    def reset(self):
-        self.valid = 0
-        self.funct7 = 0
-        self.rs1 = 0
-        self.rs2 = 0
-
-    def _to_signal_name(self, name: str) -> str:
-        if name in ['valid', 'ready']:
-            return f"io_inst_{name}"
-        else:
-            return f"io_inst_bits_{name}"
-
-    def set(self,
-            func: int,
-            rs1: int,
-            rs2: int
-        ) -> None:
-        self.valid = 1
-        self.funct7 = func
-        self.rs1 = rs1
-        self.rs2 = rs2
-
-class SRAMAddr(SignalWrapper):
-    en_sp: int
-    en_acc: int
-    addr: int
-    read: int
-    write: int
-    def __init__(self, sim: PyVerilator):
-        super().__init__(sim, 0)
-
-    def reset(self):
-        self.en_sp = 0
-        self.en_acc = 0
-        self.addr = 0
-        self.read = 0
-        self.write = 0
-
-    def _to_signal_name(self, name: str) -> str:
-        return f"io_debug_sram_io_{name}"
-
-
-class SRAMData(SignalWrapper):
-    rdata: int
-    wdata: int
-    def __init__(self, sim, index):
-        super().__init__(sim, index)
-
-    def reset(self):
-        self.wdata = 0
-
-    def _to_signal_name(self, name: str) -> str:
-        return f"io_debug_sram_io_{name}_{self.index}"
-
+import msaga as M
 
 def sim_attention_tile(
     sim: PyVerilator, inst: Instruction,
     dim: int,
-    q_addr: int, k_addr: int, v_addr: int,
-    d_addr: int, o_addr: int
+    Q: M.STile, K: M.STile, V_t: M.STile,
+    D: M.ATile, O: M.ATile, accum: bool
     ):
 
-    Q_desc = MatrixDesc(
-        origin_addr=q_addr,
-        dim=dim,
-        rev_v=False, rev_h=True,
-        delay_u=False, delay_d=False
-    )
-    K_desc = MatrixDesc(
-        origin_addr=k_addr,
-        dim=dim,
-        rev_v=False, rev_h=False,
-        delay_u=True, delay_d=False
-    )
-    V_desc = MatrixDesc(
-        origin_addr=v_addr,
-        dim=dim,
-        rev_v=True, rev_h=False,
-        delay_u=False, delay_d=True
-    )
-    O_desc = MatrixDesc(
-        origin_addr=o_addr,
-        dim=dim,
-        rev_v=False, rev_h=False, delay_u=False, delay_d=False
-    )
-    D_desc = MatrixDesc(origin_addr=d_addr, dim=dim, rev_v=False, rev_h=False, delay_u=False, delay_d=False)
+    B = M.StaticInstBuilder(dim, dim)
+    Q = Q.reverse(0)
+    B.mx_load_stationary(Q, None, None)
+    B.mx_attn_score(K, D, accum, None, None)
+    B.mx_attn_value(V_t, O, accum, None, None)
+    program = B.compile()
 
-    while not inst.ready:
+    for i in program.instructions:
+        inst.bits = i.bits
+        while not inst.ready:
+            sim.clock.tick()
+        inst.valid = 1
         sim.clock.tick()
-    inst.set(LOAD_STATIONARY, Q_desc.to_rs(), 0)
-    sim.clock.tick()
-    inst.reset()
-
-    while not inst.ready:
-        sim.clock.tick()
-    inst.set(ATTENTION_SCORE, K_desc.to_rs(), D_desc.to_rs())
-    sim.clock.tick()
-    inst.reset()
-
-    while not inst.ready:
-        sim.clock.tick()
-    inst.set(ATTENTION_VALUE, V_desc.to_rs(), O_desc.to_rs())
-    sim.clock.tick()
-    inst.reset()
+        inst.reset()
 
 
 def sim_attention_lse_norm(
@@ -173,29 +36,21 @@ def sim_attention_lse_norm(
     sram_addr: SRAMAddr,
     sram_data: list[SRAMData],
     dim: int, ew: int, mw: int,
-    d_addr: int, o_addr: int
+    D: M.ATile, O: M.ATile
 ):
 
-    D_desc = MatrixDesc(origin_addr=d_addr, dim=dim, rev_v=False, rev_h=False, delay_u=False, delay_d=False)
-    O_desc = MatrixDesc(
-        origin_addr=o_addr,
-        dim=dim,
-        rev_v=False, rev_h=False, delay_u=False, delay_d=False
-    )
+    B = M.StaticInstBuilder(dim, dim)
+    B.mx_reciprocal(D, 0, 0)
+    B.mx_attn_lse_norm(O, 0, 0)
+    program = B.compile()
 
-    inst.funct7 = ATTENTION_LSE_SCALE
-    while not inst.ready:
+    for i in program.instructions:
+        inst.bits = i.bits
+        while not inst.ready:
+            sim.clock.tick()
+        inst.valid = 1
         sim.clock.tick()
-    inst.set(ATTENTION_LSE_SCALE, 0, D_desc.to_rs())
-    sim.clock.tick()
-    inst.reset()
-
-    inst.funct7 = ATTENTION_LSE_NORM
-    while not inst.ready:
-        sim.clock.tick()
-    inst.set(ATTENTION_LSE_NORM, 0, O_desc.to_rs())
-    sim.clock.tick()
-    inst.reset()
+        inst.reset()
 
     # LSE NORM takes dim cycles
     [sim.clock.tick() for _ in range(dim)]
@@ -294,40 +149,47 @@ def test_flash_attention(
     PrevRowMax = np.full((dim, 1), np_dtype(-np.inf))
     PrevRowSum = np.full((dim, 1), np_dtype(0))
 
-    def k_addr(j: int):
-        return dim + 2 * dim * j
+    accType = M.get_dtype(addEW, addMW)
+    mulType = M.get_dtype(mulEW, mulMW)
+    # row addr is used in SRAMs
+    # spad
+    q_row_addr = 0
+    k_row_addr = lambda j: dim + 2 * dim * j
+    v_row_addr = lambda j: 2 * dim + 2 * dim * j
+    # acc
+    d_row_addr = 0
+    o_row_addr = 1
+    # byte-addr, used for `Tile`s
+    q_addr = q_row_addr * dim * mulType.itemsize
+    k_addr = lambda j : k_row_addr(j) * dim * mulType.itemsize
+    v_addr = lambda j : v_row_addr(j) * dim * mulType.itemsize
+    d_addr = d_row_addr * dim * accType.itemsize
+    o_addr = o_row_addr * dim * accType.itemsize
 
-    def v_addr(j: int):
-        return 2 * dim + 2 * dim * j
-
-    def d_addr():
-        return 0
-
-    q_addr = lambda : 0
-    d_addr = lambda : 0
-    o_addr = lambda : 1
-
-    write_sram(dim, mulEW, mulMW, sram_addr, sram_data, Q_i, q_addr())
+    # the following tiles do not hold any data, just hold address to generate the instructions
+    Q_tile = M.STile((dim, dim), dtype=mulType, data_ptr=q_addr)
+    K_tiles = [M.STile((dim, dim), dtype=mulType, data_ptr=k_addr(j)) for j in range(len(K_BLOCKS))]
+    V_tiles = [M.STile((dim, dim), dtype=mulType, data_ptr=v_addr(j)) for j in range(len(V_BLOCKS))]
+    O_tile = M.ATile((dim, dim), dtype=accType, data_ptr=o_addr)
+    D_tile = M.ATile((1, dim), dtype=accType, data_ptr=d_addr)
+    # initialize scratchpad
+    write_sram(dim, mulEW, mulMW, sram_addr, sram_data, Q_i, q_row_addr)
     for j, (K_j, V_j) in enumerate(zip(K_BLOCKS, V_BLOCKS)):
-        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, K_j, k_addr(j))
-        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, V_j.T, v_addr(j))
-
-    # we use accRAM row 0 to store exp sum, so O starts from row 1
-    write_sram(dim, addEW, addMW, sram_addr, sram_data, PrevO.T, o_addr(), accRAM=True)
+        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, K_j, k_row_addr(j))
+        write_sram(dim, mulEW, mulMW, sram_addr, sram_data, V_j.T, v_row_addr(j))
     sim.clock.tick()
 
     # 2. inner loop
     backend = PyEasyFloatBackend()
     for j, (K_j, V_j) in enumerate(zip(K_BLOCKS, V_BLOCKS)):
         # run hardware verilator simulation
-        sim_attention_tile(sim, inst, dim, q_addr(), k_addr(j), v_addr(j), d_addr(), o_addr())
+        sim_attention_tile(sim, inst, dim, Q_tile, K_tiles[j], V_tiles[j], D_tile, O_tile, accum=(j!=0))
         # run software emulation of a single tile
         ref_tile = FlashAttentionTile(Q_i, K_j, V_j, PrevRowMax, PrevRowSum, PrevO, mulEW, mulMW, addEW, addMW, backend)
         PrevRowMax = ref_tile.AccRowMaxS
         PrevRowSum = ref_tile.AccRowSum
         PrevO = ref_tile.AccO
-
-    dut_res = sim_attention_lse_norm(sim, inst, sram_addr, sram_data, dim, addEW, addMW, d_addr(), o_addr())
+    dut_res = sim_attention_lse_norm(sim, inst, sram_addr, sram_data, dim, addEW, addMW, D_tile, O_tile)
 
     torch_dtype = torch.float32 if np_dtype == np.float32 else torch.float16
     torch_res = np.array(torch.nn.functional.scaled_dot_product_attention(

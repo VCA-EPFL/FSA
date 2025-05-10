@@ -22,7 +22,8 @@ case class MSAGAParams(
       ISA.MxFunc.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap),
       ISA.MxFunc.ATTENTION_LSE_NORM -> new AttentionLseNorm(dim)
     )
-  }
+  },
+  unitTestBuild: Boolean = false
 )
 
 trait HasMSAGAParams {
@@ -64,6 +65,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
     val debug_sram_io = new DebugSRAMIO(DIM)
+    val debug_mx_inst = if (msagaParams.unitTestBuild) Some(Flipped(Decoupled(UInt(96.W)))) else None
   })
 
   val mxControl = Module(new MatrixEngineController(ev))
@@ -80,15 +82,20 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     numReadPorts = 2, numWritePorts = 2, numReadwritePorts = 0
   )
 
-  dontTouch(mxControl.io)
-  dontTouch(inputDelayer.io)
-  dontTouch(outputDelayer.io)
-  dontTouch(sa.io)
-  dontTouch(accumulator.io)
-  dontTouch(spRAM)
-  dontTouch(accRAM)
+  io.debug_mx_inst.map { inst =>
+    dontTouch(mxControl.io)
+    dontTouch(inputDelayer.io)
+    dontTouch(outputDelayer.io)
+    dontTouch(sa.io)
+    dontTouch(accumulator.io)
+    io.inst.ready := false.B
+    mxControl.io.in.valid := inst.valid
+    mxControl.io.in.bits := inst.bits.asTypeOf(mxControl.io.in.bits)
+    inst.ready := mxControl.io.in.ready
+  }.getOrElse({
+    mxControl.io.in <> io.inst
+  })
 
-  mxControl.io.in <> io.inst
 
   // TODO: connect with DMA
   spRAM.writePorts.head.enable := false.B

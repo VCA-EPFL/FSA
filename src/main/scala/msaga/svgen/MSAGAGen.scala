@@ -10,7 +10,7 @@ object MSAGAGen {
     val genArgs = GenOptions.parseArgs(args)
     val params = MSAGAParams(genArgs.dim, genArgs.spRows, genArgs.accRows)
     implicit val config: Config = new Config((_, _, _) => {
-      case MSAGAKey => params
+      case MSAGAKey => params.copy(unitTestBuild = true)
     })
 
     ChiselStage.emitSystemVerilogFile(

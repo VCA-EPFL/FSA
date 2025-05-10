@@ -19,3 +19,5 @@ def get_dtype(ew: int, mw: int) -> dtype:
             return fp16
         case (4, 3):
             return fp8
+        case _:
+            raise ValueError(f"Unknown dtype: e{ew}m{mw}")

@@ -28,8 +28,9 @@ object ISA {
 
   object Constants {
     val I_TYPE_BITS = 3
-    val N_DEP_TRACKERS = 32
-    val DEP_BITS = log2Up(N_DEP_TRACKERS)
+    val N_SEMAPHORES = 32
+    val SEM_ID_BITS = log2Up(N_SEMAPHORES)
+    val SEM_VALUE_BITS = 3
 
     val MX_FUNC_BITS = 5
     val SPAD_MAX_ADDR_BITS = 20
@@ -41,7 +42,7 @@ object ISA {
 
     val DMA_FUNC_BITS = 4
     val DMA_SIZE_BITS = 10
-    val DMA_REPEAT_BITS = 10
+    val DMA_REPEAT_BITS = 9
     val MEM_MAX_ADDR_BITS = 39
     val MEM_STRIDE_BITS = 10
   }
@@ -58,6 +59,11 @@ object ISA {
     def ATTENTION_VALUE_COMPUTE = 2.U
     def ATTENTION_LSE_NORM_SCALE = 3.U
     def ATTENTION_LSE_NORM = 4.U
-    def wait_for_accumulator(func: UInt): Bool = func.isOneOf(ATTENTION_LSE_NORM_SCALE, ATTENTION_LSE_NORM)
   }
+
+  object DMAFunc {
+    def LD_SRAM = 0.U
+    def ST_SRAM = 1.U
+  }
+
 }

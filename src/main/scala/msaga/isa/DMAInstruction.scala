@@ -5,17 +5,19 @@ import ISA.Constants._
 
 class DMAInstructionHeader extends NBytesBundle(4) with HasInstructionType {
   val func = UInt(DMA_FUNC_BITS.W)
-  val dst = UInt(DEP_BITS.W)
-  val src1 = UInt(DEP_BITS.W)
-  val src2 = UInt(DEP_BITS.W)
+  val consumerSemId = UInt(SEM_ID_BITS.W)
+  val consumerSemValue = UInt(SEM_VALUE_BITS.W)
+  val producerSemId = UInt(SEM_ID_BITS.W)
+  val producerSemValue = UInt(SEM_VALUE_BITS.W)
   val repeat = UInt(DMA_REPEAT_BITS.W)
-  val _pad = padOpt(I_TYPE_BITS + DMA_FUNC_BITS + DEP_BITS * 3 + DMA_REPEAT_BITS)
+  val _pad = padOpt(I_TYPE_BITS + DMA_FUNC_BITS + 2 * (SEM_ID_BITS + SEM_VALUE_BITS) + DMA_REPEAT_BITS)
   checkWidth()
 }
 
 class DMAInstructionSRAM(val addrWidth: Int) extends NBytesBundle(4) with HasAddr {
   val stride = SInt(SRAM_STRIDE_BITS.W)
-  val _pad = padOpt(SRAM_MAX_ADDR_BITS + SRAM_STRIDE_BITS)
+  val isAccum = Bool()
+  val _pad = padOpt(SRAM_MAX_ADDR_BITS + SRAM_STRIDE_BITS + 1)
   override def maxAddrWidth: Int = SRAM_MAX_ADDR_BITS
   checkWidth()
 }

@@ -6,11 +6,11 @@ import ISA.Constants._
 class MatrixInstructionHeader extends NBytesBundle(4) with HasInstructionType {
   val func = UInt(MX_FUNC_BITS.W)
   val waitPrevAcc = Bool()
-  val dst2 = UInt(DEP_BITS.W)
-  val dst1 = UInt(DEP_BITS.W)
-  val src2 = UInt(DEP_BITS.W)
-  val src1 = UInt(DEP_BITS.W)
-  val _pad = padOpt(I_TYPE_BITS + MX_FUNC_BITS + 1 + 4 * DEP_BITS)
+  val consumerSemId = UInt(SEM_ID_BITS.W)
+  val consumerSemValue = UInt(SEM_VALUE_BITS.W)
+  val producerSemId = UInt(SEM_ID_BITS.W)
+  val producerSemValue = UInt(SEM_VALUE_BITS.W)
+  val _pad = padOpt(I_TYPE_BITS + MX_FUNC_BITS + 1 + 2 * (SEM_ID_BITS + SEM_VALUE_BITS))
   checkWidth()
 }
 

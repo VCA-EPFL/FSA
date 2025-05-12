@@ -85,6 +85,7 @@ class CompoundMemoryManger:
         self.acc = MemoryAllocator(acc_base, acc_size, acc_align)
         self.spad_dtype = spad_dtype
         self.acc_dtype = acc_dtype
+        self.mem_tensor_list: list[MTile] = []
 
     def alloc_spad(self, shape: int | tuple[int, ...]) -> STile:
         return self.__allocate(self.spad, shape, self.spad_dtype, STile)
@@ -93,7 +94,9 @@ class CompoundMemoryManger:
         return self.__allocate(self.acc, shape, self.acc_dtype, ATile)
 
     def alloc_mem(self, shape: int | tuple[int, ...], dtype: dtype) -> MTile:
-        return self.__allocate(self.mem, shape, dtype, MTile)
+        tile = self.__allocate(self.mem, shape, dtype, MTile)
+        self.mem_tensor_list.append(tile)
+        return tile
 
     @staticmethod
     def __allocate(allocator: MemoryAllocator, shape: int | tuple[int, ...], dtype: dtype, ret: Type[T]) -> T:
@@ -117,3 +120,11 @@ class CompoundMemoryManger:
             return size
         else:
             raise TypeError(f"Shape must be an int or tuple of ints, got {type(shape)}")
+
+
+# TODO: do not hard code!
+g_mem_manger = CompoundMemoryManger(
+    mem_base=0x80000000, mem_size=0x10000, mem_align=8,
+    spad_base=0, spad_size=0x1000, spad_align= 4 * fp16.itemsize, spad_dtype=fp16,
+    acc_base=0, acc_size=0x1000, acc_align= 4 * fp32.itemsize, acc_dtype=fp32
+)

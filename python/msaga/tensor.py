@@ -1,5 +1,5 @@
 from .dtype import dtype
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, Optional
 
 T = TypeVar('T', bound='BaseTensor')
 
@@ -27,6 +27,15 @@ class BaseTensor(Generic[T]):
     @property
     def shape(self) -> tuple[int, ...]:
         return self._shape
+
+    @property
+    def size(self) -> int:
+        """data size in bytes"""
+        s = 1
+        for dim in self.shape:
+            s *= dim
+        s *= self.dtype.itemsize
+        return s
 
     def split(self, split_size: int, dim: int) -> tuple[T, ...]:
         """Split the tensor into chunks of split_size along the specified dimension."""
@@ -76,8 +85,11 @@ class BaseTensor(Generic[T]):
 
 
 class MTile(BaseTensor['MTile']):
+    data: Optional[bytes]
     def __init__(self, shape, dtype, data_ptr = 0, stride = None):
         super().__init__(shape, dtype, data_ptr, stride)
+        self.data = None
+
 
 class STile(BaseTensor['STile']):
     def __init__(self, shape, dtype, data_ptr = 0, stride = None):

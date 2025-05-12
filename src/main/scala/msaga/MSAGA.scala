@@ -8,7 +8,7 @@ import msaga.arithmetic.ArithmeticSyntax._
 import msaga.isa.{ISA, MatrixInstruction}
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
 
-case object MSAGAKey extends Field[MSAGAParams]
+case object MSAGAKey extends Field[Option[MSAGAParams]]
 
 case class MSAGAParams(
   dim: Int,
@@ -28,7 +28,7 @@ case class MSAGAParams(
 
 trait HasMSAGAParams {
   implicit val p: Parameters
-  val msagaParams = p(MSAGAKey)
+  val msagaParams = p(MSAGAKey).get
   def DIM = msagaParams.dim
   def DIM_WIDTH = log2Up(msagaParams.dim)
 

@@ -14,6 +14,11 @@ case class MSAGAParams(
   dim: Int,
   spadRows: Int,
   accRows: Int,
+  instructionQueueEntries: Int = 256,
+  dmaLoadInflight: Int = 16,
+  dmaStoreInflight: Int = 8,
+  // if not set, use the number of memory channels
+  nMemPorts: Option[Int] = None,
   supportedExecutionPlans: (Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
     (dim, ap) => Seq(
       ISA.MxFunc.LOAD_STATIONARY -> new LoadStationary(dim),
@@ -24,7 +29,12 @@ case class MSAGAParams(
     )
   },
   unitTestBuild: Boolean = false
-)
+) {
+  def spadAddrWidth = log2Up(spadRows)
+  def accAddrWidth = log2Up(accRows)
+  def sramAddrWidth = Seq(spadAddrWidth, accAddrWidth).max
+  def dmaMaxInflight = Seq(dmaLoadInflight, dmaStoreInflight).max
+}
 
 trait HasMSAGAParams {
   implicit val p: Parameters
@@ -33,12 +43,12 @@ trait HasMSAGAParams {
   def DIM_WIDTH = log2Up(msagaParams.dim)
 
   def SPAD_ROWS = msagaParams.spadRows
-  def SPAD_ROW_ADDR_WIDTH = log2Up(SPAD_ROWS)
+  def SPAD_ROW_ADDR_WIDTH = msagaParams.spadAddrWidth
 
   def ACC_ROWS = msagaParams.accRows
-  def ACC_ROW_ADDR_WIDTH = log2Up(ACC_ROWS)
+  def ACC_ROW_ADDR_WIDTH = msagaParams.accAddrWidth
 
-  def SRAM_ROW_ADDR_WIDTH = Seq(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH).max
+  def SRAM_ROW_ADDR_WIDTH = msagaParams.sramAddrWidth
 }
 
 abstract class MSAGABundle(implicit val p: Parameters) extends Bundle with HasMSAGAParams

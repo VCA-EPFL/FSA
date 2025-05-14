@@ -1,0 +1,209 @@
+package msaga.dma
+
+import freechips.rocketchip.amba.axi4._
+import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.subsystem._
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+import testchipip.soc.SubsystemInjector
+import chisel3._
+import chisel3.util._
+import freechips.rocketchip.tilelink._
+import msaga.isa.DMAInstruction
+import msaga.isa.ISA.Constants._
+
+class DMARequest(val sramAddrWidth: Int, val memAddrWidth: Int) extends Bundle {
+  val memAddr = UInt(memAddrWidth.W)
+  val memStride = SInt(MEM_STRIDE_BITS.W)
+  val sramAddr = UInt(sramAddrWidth.W)
+  val sramStride = SInt(SRAM_STRIDE_BITS.W)
+  val repeat = UInt(DMA_REPEAT_BITS.W)
+  val size = UInt(DMA_SIZE_BITS.W)
+  val dstSemId = UInt(SEM_ID_BITS.W)
+  val dstSemValue = UInt(SEM_VALUE_BITS.W)
+}
+
+// Partition the request into `n` parts across `repeat`
+class RequestPartitioner(reqGen: DMARequest, n: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Flipped(Decoupled(reqGen))
+    val out = Vec(n, Decoupled(reqGen))
+  })
+
+  if (n == 1) {
+    io.out.head <> io.in
+  } else {
+    val reqs = Reg(Vec(n, reqGen))
+    val valid = RegInit(false.B)
+
+    val initialRepeatCnt = (io.in.bits.repeat >> log2Up(n).U).asUInt
+    val remainingRepeatCnt = io.in.bits.repeat.take(log2Up(n))
+    for ((req, i) <- reqs.zipWithIndex) {
+      val addRem = remainingRepeatCnt > i.U
+      val repeatCnt = Mux(addRem,
+        initialRepeatCnt + 1.U,
+        initialRepeatCnt
+      )
+      val addrIncr = (initialRepeatCnt * (i.U +& Mux(addRem, i.U, remainingRepeatCnt))).zext
+      when(io.in.fire) {
+        req := io.in.bits
+        req.repeat := repeatCnt
+        req.memAddr := (io.in.bits.memAddr.asSInt + addrIncr * io.in.bits.memStride).asUInt
+        req.sramAddr := (io.in.bits.sramAddr.asSInt + addrIncr * io.in.bits.sramStride).asUInt
+      }
+    }
+
+    val outValid = valid && Cat(io.out.map(_.ready)).andR
+    for ((out, req) <- io.out.zip(reqs)) {
+      out.bits := req
+      out.valid := outValid && req.repeat =/= 0.U
+    }
+    io.in.ready := !valid || outValid
+    when(outValid) {
+      valid := false.B
+    }
+    when(io.in.fire) {
+      valid := true.B
+    }
+  }
+}
+
+
+class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) extends Module {
+  val io = IO(new Bundle {
+    val ar = DecoupledIO(new AXI4BundleAR(edge.bundle))
+    val r = Flipped(DecoupledIO(new AXI4BundleR(edge.bundle)))
+    val req = Flipped(Decoupled(reqGen))
+  })
+
+  require(isPow2(nInflight))
+
+  // val maxTransfer = (1 << AXI4Parameters.lenBits) * edge.slave.beatBytes
+  val maxTransfer = edge.slave.maxTransfer
+  val maxBurstLen = maxTransfer / edge.slave.beatBytes
+  when(io.req.fire) {
+    assert(io.req.bits.size.take(log2Up(edge.slave.beatBytes)) === 0.U, "Currently size must be a multiple of the beat size")
+    assert(io.req.bits.size <= maxTransfer.U, "Each request must be able to fit in a single AXI4 burst transfer")
+  }
+
+  val (ar, r) = (io.ar, io.r)
+
+  class Entry extends Bundle {
+    val req = reqGen.cloneType
+    // duplicate the repeat field for counting the read response
+    val rRepeat = UInt(DMA_REPEAT_BITS.W)
+  }
+
+  val entries = Reg(Vec(nInflight, new Entry))
+
+  val entryValid = RegInit(VecInit(Seq.fill(nInflight)(false.B)))
+  val enqPtr = RegInit(0.U(log2Up(nInflight).W))
+  val arPtr = RegInit(0.U(log2Up(nInflight).W))
+  val rPtr = RegInit(0.U(log2Up(nInflight).W))
+
+  val arEntry = entries(arPtr)
+  ar.valid := entryValid(arPtr)
+  ar.bits.addr := arEntry.req.memAddr
+  ar.bits.id := 0.U
+  ar.bits.len := (arEntry.req.size >> log2Up(edge.slave.beatBytes).asUInt) - 1.U
+  ar.bits.size := log2Up(edge.slave.beatBytes).U
+  ar.bits.burst := AXI4Parameters.BURST_INCR
+  ar.bits.lock := 0.U
+  ar.bits.cache := 0.U
+  ar.bits.prot := 0.U
+  ar.bits.qos := 0.U
+
+  when(ar.fire) {
+    arEntry.req.repeat := arEntry.req.repeat - 1.U
+    arEntry.req.memAddr := (arEntry.req.memAddr.asSInt + arEntry.req.memStride).asUInt
+    when(arEntry.req.repeat === 1.U) {
+      arPtr := arPtr + 1.U
+    }
+  }
+
+  val rBeatCnt = RegInit(0.U(log2Up(maxBurstLen).W))
+
+  when(r.fire) {
+    val rEntry = entries(rPtr)
+    assert(r.bits.id === 0.U, "Currently only one ID is supported")
+    assert(r.bits.resp === AXI4Parameters.RESP_OKAY, "Currently only OKAY response is supported")
+    rBeatCnt := Mux(r.bits.last, 0.U, rBeatCnt + 1.U)
+    when(r.bits.last) {
+      rEntry.rRepeat := rEntry.rRepeat - 1.U
+      rEntry.req.sramAddr := (rEntry.req.sramAddr.asSInt + rEntry.req.sramStride).asUInt
+      when(rEntry.rRepeat === 1.U) {
+        rPtr := rPtr + 1.U
+        entryValid(rPtr) := false.B
+      }
+    }
+  }
+
+  when(io.req.fire) {
+    entries(enqPtr).req := io.req.bits
+    entries(enqPtr).rRepeat := io.req.bits.repeat
+    entryValid(enqPtr) := true.B
+    enqPtr := enqPtr + 1.U
+  }
+  io.req.ready := !entryValid(enqPtr)
+
+  // TODO: connect the r channel to SRAM
+  r.ready := true.B
+
+  dontTouch(io)
+  dontTouch(rBeatCnt)
+
+}
+
+class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
+  val node = outer.node
+  val nPorts = node.out.size
+  val memAddrWidth = node.out.map(_._2.bundle.addrBits).max
+  val sramAddrWidth = outer.sramAddrWidth
+  val (dmaLoadInflight, dmaStoreInflight) = (outer.dmaLoadInflight, outer.dmaStoreInflight)
+
+  val io = IO(new Bundle {
+    val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
+  })
+
+  val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
+  dmaReq.valid := io.inst.valid
+  dmaReq.bits.memAddr := io.inst.bits.mem.addr
+  dmaReq.bits.memStride := io.inst.bits.mem.stride
+  dmaReq.bits.sramAddr := io.inst.bits.sram.addr
+  dmaReq.bits.sramStride := io.inst.bits.sram.stride
+  dmaReq.bits.repeat := io.inst.bits.header.repeat
+  dmaReq.bits.size := io.inst.bits.mem.size
+  dmaReq.bits.dstSemId := io.inst.bits.header.producerSemId
+  dmaReq.bits.dstSemValue := io.inst.bits.header.producerSemValue
+  io.inst.ready := dmaReq.ready
+
+  val partitioner = Module(new RequestPartitioner(chiselTypeOf(dmaReq.bits), nPorts))
+  partitioner.io.in <> dmaReq
+
+  val loadHandlers = partitioner.io.out.zip(node.out).map { case (req, (axi, edge)) =>
+    val loadHandler = Module(new LoadHandler(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight))
+    loadHandler.io.req <> req
+    loadHandler.io.r <> axi.r
+    axi.ar <> loadHandler.io.ar
+    loadHandler
+  }
+}
+
+class DMA
+(
+  val nPorts: Int,
+  val sramAddrWidth: Int,
+  val dmaLoadInflight: Int,
+  val dmaStoreInflight: Int
+)(implicit p: Parameters) extends LazyModule {
+
+  require(isPow2(nPorts))
+
+  val node = AXI4MasterNode(Seq.fill(nPorts){AXI4MasterPortParameters(
+    masters = Seq(AXI4MasterParameters(
+      name = "dma", id = IdRange(0, 1)
+    ))
+  )})
+
+  lazy val module = new DMAImpl(this)
+}

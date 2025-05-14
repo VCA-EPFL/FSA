@@ -61,14 +61,15 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     msaga.io.inst.bits := mxInst.bits
     mxInst.ready := msaga.io.inst.ready && mxReady
 
-    dma.module.io.inst <> dmaInst
+    dma.module.io.inst.valid := dmaInst.valid && dmaReady
+    dma.module.io.inst.bits := dmaInst.bits
+    dmaInst.ready := dma.module.io.inst.ready && dmaReady
 
+    semaphores.io.write.last := dma.module.io.semaphoreWrite
     //TODO
     msaga.io.debug_sram_io <> DontCare
-    semaphores.io.write.foreach{w =>
-      w.valid := false.B
-      w.bits := DontCare
-    }
+    semaphores.io.write.head.valid := false.B
+    semaphores.io.write.head.bits := DontCare
   }
 }
 

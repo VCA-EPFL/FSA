@@ -11,6 +11,8 @@ import chisel3.util._
 import freechips.rocketchip.tilelink._
 import msaga.isa.DMAInstruction
 import msaga.isa.ISA.Constants._
+import msaga.frontend.SemaphoreWrite
+import msaga.utils.DelayedAssert
 
 class DMARequest(val sramAddrWidth: Int, val memAddrWidth: Int) extends Bundle {
   val memAddr = UInt(memAddrWidth.W)
@@ -56,7 +58,10 @@ class RequestPartitioner(reqGen: DMARequest, n: Int) extends Module {
     val outValid = valid && Cat(io.out.map(_.ready)).andR
     for ((out, req) <- io.out.zip(reqs)) {
       out.bits := req
-      out.valid := outValid && req.repeat =/= 0.U
+      /* to make semaphore write condition check easier,
+         we always allocate an entry for each port even if repeat is 0
+       */
+      out.valid := outValid
     }
     io.in.ready := !valid || outValid
     when(outValid) {
@@ -74,6 +79,7 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
     val ar = DecoupledIO(new AXI4BundleAR(edge.bundle))
     val r = Flipped(DecoupledIO(new AXI4BundleR(edge.bundle)))
     val req = Flipped(Decoupled(reqGen))
+    val semWrite = Decoupled(new SemaphoreWrite)
   })
 
   require(isPow2(nInflight))
@@ -100,12 +106,14 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
   val enqPtr = RegInit(0.U(log2Up(nInflight).W))
   val arPtr = RegInit(0.U(log2Up(nInflight).W))
   val rPtr = RegInit(0.U(log2Up(nInflight).W))
+  val releasePtr = RegInit(0.U(log2Up(nInflight).W))
 
+  // read address
   val arEntry = entries(arPtr)
-  ar.valid := entryValid(arPtr)
+  ar.valid := entryValid(arPtr) && arEntry.req.repeat =/= 0.U
   ar.bits.addr := arEntry.req.memAddr
   ar.bits.id := 0.U
-  ar.bits.len := (arEntry.req.size >> log2Up(edge.slave.beatBytes).asUInt) - 1.U
+  ar.bits.len := (arEntry.req.size >> log2Up(edge.slave.beatBytes)).asUInt - 1.U
   ar.bits.size := log2Up(edge.slave.beatBytes).U
   ar.bits.burst := AXI4Parameters.BURST_INCR
   ar.bits.lock := 0.U
@@ -121,8 +129,8 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
     }
   }
 
+  // read data
   val rBeatCnt = RegInit(0.U(log2Up(maxBurstLen).W))
-
   when(r.fire) {
     val rEntry = entries(rPtr)
     assert(r.bits.id === 0.U, "Currently only one ID is supported")
@@ -133,11 +141,21 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
       rEntry.req.sramAddr := (rEntry.req.sramAddr.asSInt + rEntry.req.sramStride).asUInt
       when(rEntry.rRepeat === 1.U) {
         rPtr := rPtr + 1.U
-        entryValid(rPtr) := false.B
       }
     }
   }
 
+  // semaphore update
+  val releaseEntry = entries(releasePtr)
+  io.semWrite.valid := entryValid(releasePtr) && releaseEntry.rRepeat === 0.U
+  io.semWrite.bits.semaphoreId := releaseEntry.req.dstSemId
+  io.semWrite.bits.semaphoreValue := releaseEntry.req.dstSemValue
+  when(io.semWrite.fire) {
+    releasePtr := releasePtr + 1.U
+    entryValid(releasePtr) := false.B
+  }
+
+  // enq request
   when(io.req.fire) {
     entries(enqPtr).req := io.req.bits
     entries(enqPtr).rRepeat := io.req.bits.repeat
@@ -163,6 +181,7 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
+    val semaphoreWrite = Valid(new SemaphoreWrite)
   })
 
   val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
@@ -187,6 +206,20 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
     axi.ar <> loadHandler.io.ar
     loadHandler
   }
+
+  val loadSemWriteReady = Cat(loadHandlers.map(_.io.semWrite.valid)).andR
+  loadHandlers.foreach(_.io.semWrite.ready := loadSemWriteReady)
+  io.semaphoreWrite.bits := loadHandlers.head.io.semWrite.bits
+  io.semaphoreWrite.valid := loadHandlers.head.io.semWrite.fire
+  when(io.semaphoreWrite.fire) {
+    /* since we only use 1 axi id, responses arrives in order
+       requests in different load handlers finish in order
+     */
+    for (i <- 1 until nPorts) {
+      DelayedAssert(loadHandlers(i).io.semWrite.bits.asUInt === io.semaphoreWrite.bits.asUInt)
+    }
+  }
+
 }
 
 class DMA

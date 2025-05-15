@@ -19,7 +19,7 @@ trait HasEffRange {
 
   def valid(t: UInt, base: Int = 0): Bool = {
     require(repeat >= 1)
-    t.between(cycle - base, cycle + repeat - base)
+    if (cycle < 0) false.B else t.between(cycle - base, cycle + repeat - base)
   }
 }
 
@@ -97,10 +97,19 @@ trait ExecutionPlan {
     }
   }
 
+  case class SemaphoreWrite(cycle: Int) extends HasEffRange {
+    override val repeat: Int = 1
+    def useAccumTimer: Boolean = {
+      require(cycle < computeMaxCycle || cycle < accumulateMaxCycle)
+      accumulateMaxCycle > 0 && cycle >= accStartCycle
+    }
+  }
+
   val sp_read = ListBuffer[SpReadDesc]()
   val cmp_ctrl = ListBuffer[CmpCtrlDesc]()
   val acc_read = ListBuffer[AccReadDesc]()
   val acc_ctrl = ListBuffer[AccCtrlDesc]()
+  var sem_write: SemaphoreWrite = SemaphoreWrite(-1)
 
   def readScratchPad(cycle: Int, repeat: Int, const: Option[ConstRead]) = {
     sp_read += SpReadDesc(cycle, repeat, const)
@@ -116,6 +125,10 @@ trait ExecutionPlan {
 
   def setAccumulator(cycle: Int, repeat: Int, command: UInt) = {
     acc_ctrl += AccCtrlDesc(cycle, repeat, command)
+  }
+
+  def releaseSemaphore(cycle: Int) = {
+    sem_write = SemaphoreWrite(cycle)
   }
 
   // exclusive
@@ -149,6 +162,8 @@ trait ExecutionPlan {
 class LoadStationary(val dim: Int) extends ExecutionPlan {
   // read Q from spad
   readScratchPad(0, dim, None)
+  // release the semaphore immediately at the last cycle of reading sram
+  releaseSemaphore(dim - 1)
   // load into systolic array
   load_reg_li.parallel(1, dim)
 }
@@ -157,6 +172,8 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   /****** S = Q @ K ******/
   // read K from spad
   readScratchPad(0, dim, None)
+  // release the semaphore immediately at the last cycle of reading sram
+  releaseSemaphore(dim - 1)
   // stream in K, multiply with Q from bottom left of the SA
   mac.flow_up(1, dim)
   flow_lr.flow_up(1, dim)
@@ -219,6 +236,8 @@ class AttentionValueExecPlan(val dim: Int) extends ExecutionPlan {
   /****** O = P @ V ******/
   // read V from spad
   readScratchPad(0, dim, None)
+  // release the semaphore immediately at the last cycle of reading sram
+  releaseSemaphore(dim - 1)
   // V enters the SA from upper left
   mac.flow_down(1, dim)
   acc_ui.flow_down(1, dim)
@@ -238,10 +257,12 @@ class AttentionLseNormScale
   readAccRAM(0, 1, None, rmw = false)
   setAccumulator(1, 1, AccumulatorCmd.SET_SCALE)
   setAccumulator(2, ap.reciprocalLatency, AccumulatorCmd.RECIPROCAL)
+  releaseSemaphore(2 + ap.reciprocalLatency - 1)
 }
 
 // perform the final lse norm after each flash attention inner loop
 class AttentionLseNorm(val dim: Int) extends ExecutionPlan {
   readAccRAM(0, dim, None)
   setAccumulator(1, dim, AccumulatorCmd.ACC)
+  releaseSemaphore(dim)
 }

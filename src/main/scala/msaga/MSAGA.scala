@@ -5,6 +5,7 @@ import chisel3.util._
 import msaga.arithmetic.{Arithmetic, ArithmeticImpl, HasArithmeticParams}
 import msaga.sa._
 import msaga.arithmetic.ArithmeticSyntax._
+import msaga.frontend.SemaphoreWrite
 import msaga.isa.{ISA, MatrixInstruction}
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
 
@@ -74,6 +75,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
+    val sem_write = Valid(new SemaphoreWrite)
     val debug_sram_io = new DebugSRAMIO(DIM)
     val debug_mx_inst = if (msagaParams.unitTestBuild) Some(Flipped(Decoupled(UInt(96.W)))) else None
   })
@@ -105,6 +107,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   }.getOrElse({
     mxControl.io.in <> io.inst
   })
+  io.sem_write := mxControl.io.sem_write
 
 
   // TODO: connect with DMA

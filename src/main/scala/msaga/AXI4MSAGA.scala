@@ -47,8 +47,8 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     decoder.io.in.bits := rawInstQueue.io.deq.bits
     rawInstQueue.io.deq.ready := decoder.io.in.ready && busy
 
-    val mxInst = Queue(decoder.io.outMx)
-    val dmaInst = Queue(decoder.io.outDMA)
+    val mxInst = Queue(decoder.io.outMx, pipe = true)
+    val dmaInst = Queue(decoder.io.outDMA, pipe = true)
 
     semaphores.io.read.head.semaphoreId := mxInst.bits.header.consumerSemId
     semaphores.io.read.head.semaphoreValue := mxInst.bits.header.consumerSemValue
@@ -65,11 +65,10 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     dma.module.io.inst.bits := dmaInst.bits
     dmaInst.ready := dma.module.io.inst.ready && dmaReady
 
+    semaphores.io.write.head := msaga.io.sem_write
     semaphores.io.write.last := dma.module.io.semaphoreWrite
     //TODO
     msaga.io.debug_sram_io <> DontCare
-    semaphores.io.write.head.valid := false.B
-    semaphores.io.write.head.bits := DontCare
   }
 }
 

@@ -5,8 +5,9 @@ import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
 import msaga.sa._
 import msaga.arithmetic._
+import msaga.frontend.SemaphoreWrite
 import msaga.isa._
-import msaga.utils.Ehr
+import msaga.utils.{DelayedAssert, Ehr}
 
 object ConstIdx {
   def width = 1
@@ -46,6 +47,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     val cmp_ctrl = Valid(new CmpControl)
     val pe_ctrl = Vec(DIM, Valid(new PECtrl))
     val acc_ctrl = Valid(new AccumulatorControl)
+    val sem_write = Valid(new SemaphoreWrite)
   })
 
   val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM, impl).unzip
@@ -56,14 +58,21 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   val rs2_deq_ptr = RegInit(0.U(1.W))
   val rs2_enq_ptr = RegInit(0.U(1.W))
   val rs2 = rs2_queue(rs2_deq_ptr)
+  val semahpore_queue = Module(new Queue(new SemaphoreWrite, entries = 2, pipe = true))
 
-  val requireAccum = Cat(planFunc.zip(allPlans).map{ case (func, plan) =>
-    func === io.in.bits.header.func && (plan.accumulateMaxCycle > 0).B
-  }).orR
+  val planSel = planFunc.map(func => func === io.in.bits.header.func)
+  val requireAccum = Mux1H(planSel, allPlans.map(_.accumulateMaxCycle > 0).map(_.B))
+  val hasDstSemaphore = Mux1H(planSel, allPlans.map(_.sem_write.cycle > 0).map(_.B))
   when(io.in.fire && requireAccum) {
     rs2_queue(rs2_enq_ptr) := io.in.bits.acc
     rs2_enq_ptr := rs2_enq_ptr + 1.U
   }
+  semahpore_queue.io.enq.valid := io.in.fire && hasDstSemaphore
+  semahpore_queue.io.enq.bits.semaphoreId := io.in.bits.header.producerSemId
+  semahpore_queue.io.enq.bits.semaphoreValue := io.in.bits.header.producerSemValue
+  DelayedAssert(semahpore_queue.io.enq.ready)
+  io.sem_write.valid := semahpore_queue.io.deq.fire
+  io.sem_write.bits := semahpore_queue.io.deq.bits
 
   // Make valid a EHR to allow back-to-back execution
   val valid = Ehr(2, Bool(), Some(false.B))
@@ -126,6 +135,15 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   }.unzip
   io.acc_ctrl.valid := Cat(accValid).orR
   io.acc_ctrl.bits := Mux1H(accValid, accCtrl)
+
+  // Release Semaphore
+  semahpore_queue.io.deq.ready := Cat(computeFlags.zip(accumFlags).zip(allPlans).map{ case ((cf, af), plan) =>
+    if (plan.sem_write.useAccumTimer) {
+      af && plan.sem_write.valid(accumTimer, base = plan.accStartCycle)
+    } else {
+      cf && plan.sem_write.valid(computeTimer)
+    }
+  }).orR
 
 
   // Update flags / timers

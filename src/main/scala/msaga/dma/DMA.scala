@@ -9,6 +9,7 @@ import testchipip.soc.SubsystemInjector
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.tilelink._
+import msaga.SRAMWrite
 import msaga.isa.DMAInstruction
 import msaga.isa.ISA.Constants._
 import msaga.frontend.SemaphoreWrite
@@ -74,12 +75,13 @@ class RequestPartitioner(reqGen: DMARequest, n: Int) extends Module {
 }
 
 
-class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) extends Module {
+class LoadHandler[E <: Data](edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int, spadWriteGen: SRAMWrite[E]) extends Module {
   val io = IO(new Bundle {
     val ar = DecoupledIO(new AXI4BundleAR(edge.bundle))
     val r = Flipped(DecoupledIO(new AXI4BundleR(edge.bundle)))
     val req = Flipped(Decoupled(reqGen))
     val semWrite = Decoupled(new SemaphoreWrite)
+    val spadWrite = spadWriteGen.cloneType
   })
 
   require(isPow2(nInflight))
@@ -131,6 +133,20 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
 
   // read data
   val rBeatCnt = RegInit(0.U(log2Up(maxBurstLen).W))
+  val nLanes = io.spadWrite.data.getWidth / (edge.slave.beatBytes * 8)
+  require(io.spadWrite.data.getWidth % (edge.slave.beatBytes * 8) == 0)
+  val wData = VecInit(Seq.fill(nLanes){ r.bits.data }).asTypeOf(io.spadWrite.data)
+  val wMask = VecInit(
+    (0 until nLanes).map(i => i.U === rBeatCnt).flatMap(b =>
+      Seq.fill(io.spadWrite.mask.length / nLanes)(b)
+    )
+  )
+  io.spadWrite.valid := r.valid
+  io.spadWrite.addr := entries(rPtr).req.sramAddr
+  io.spadWrite.data := wData
+  io.spadWrite.mask := wMask
+  r.ready := io.spadWrite.ready
+
   when(r.fire) {
     val rEntry = entries(rPtr)
     assert(r.bits.id === 0.U, "Currently only one ID is supported")
@@ -164,15 +180,13 @@ class LoadHandler(edge: AXI4EdgeParameters, reqGen: DMARequest, nInflight: Int) 
   }
   io.req.ready := !entryValid(enqPtr)
 
-  // TODO: connect the r channel to SRAM
-  r.ready := true.B
 
   dontTouch(io)
   dontTouch(rBeatCnt)
 
 }
 
-class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
+class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(outer) {
   val node = outer.node
   val nPorts = node.out.size
   val memAddrWidth = node.out.map(_._2.bundle.addrBits).max
@@ -182,6 +196,7 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
     val semaphoreWrite = Valid(new SemaphoreWrite)
+    val spadWrite = Vec(nPorts, new SRAMWrite(sramAddrWidth, outer.spadElem, outer.spadCols))
   })
 
   val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
@@ -199,11 +214,12 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
   val partitioner = Module(new RequestPartitioner(chiselTypeOf(dmaReq.bits), nPorts))
   partitioner.io.in <> dmaReq
 
-  val loadHandlers = partitioner.io.out.zip(node.out).map { case (req, (axi, edge)) =>
-    val loadHandler = Module(new LoadHandler(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight))
+  val loadHandlers = io.spadWrite.zip(partitioner.io.out.zip(node.out)).map { case (spad, (req, (axi, edge))) =>
+    val loadHandler = Module(new LoadHandler(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight, spad))
     loadHandler.io.req <> req
     loadHandler.io.r <> axi.r
     axi.ar <> loadHandler.io.ar
+    spad <> loadHandler.io.spadWrite
     loadHandler
   }
 
@@ -222,12 +238,16 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
 
 }
 
-class DMA
+class DMA[E <: Data, A <: Data]
 (
   val nPorts: Int,
   val sramAddrWidth: Int,
   val dmaLoadInflight: Int,
-  val dmaStoreInflight: Int
+  val dmaStoreInflight: Int,
+  val spadElem: E,
+  val spadCols: Int,
+  val accElem: A,
+  val accCols: Int
 )(implicit p: Parameters) extends LazyModule {
 
   require(isPow2(nPorts))

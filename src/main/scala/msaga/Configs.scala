@@ -46,22 +46,6 @@ case class MSAGAInjector[E <: Data : Arithmetic, A <: Data : Arithmetic](arithme
   }
 })
 
-case object DMAInjector extends SubsystemInjector((p, baseSubsystem) => {
-  implicit val q = p
-  val mbus = baseSubsystem.locateTLBusWrapper(MBUS)
-  val dma = mbus {
-    // LazyModule(new DMATester())
-    LazyModule(new DMA(p(ExtMem).get.nMemoryChannels, 10, 16, 16))
-  }
-  mbus.coupleFrom("dma") {
-    _ :=*
-      AXI4ToTL() :=*
-      AXI4UserYanker(capMaxFlight = Some(15)) :=*
-      AXI4Fragmenter() :=*
-      dma.node
-  }
-})
-
 class WithFpMSAGA
 (
   params: MSAGAParams = Configs.smallMSAGAParams,

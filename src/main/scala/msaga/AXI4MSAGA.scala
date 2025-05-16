@@ -21,10 +21,14 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     address = AddressSet(0x8000, 0xff)
   )
   val dma = LazyModule(new DMA(
-    nPorts = msagaParams.nMemPorts.getOrElse(p(ExtMem).map(_.nMemoryChannels).getOrElse(1)),
+    nPorts = msagaParams.nMemPorts,
     sramAddrWidth = msagaParams.sramAddrWidth,
     dmaLoadInflight = msagaParams.dmaLoadInflight,
     dmaStoreInflight = msagaParams.dmaStoreInflight,
+    spadElem = ev.elemType,
+    spadCols = msagaParams.dim,
+    accElem = ev.accType,
+    accCols = msagaParams.dim
   ))
   val memNode = dma.node
 
@@ -60,6 +64,8 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     msaga.io.inst.valid := mxInst.valid && mxReady
     msaga.io.inst.bits := mxInst.bits
     mxInst.ready := msaga.io.inst.ready && mxReady
+
+    msaga.io.spad_write <> dma.module.io.spadWrite
 
     dma.module.io.inst.valid := dmaInst.valid && dmaReady
     dma.module.io.inst.bits := dmaInst.bits

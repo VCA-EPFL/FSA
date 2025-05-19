@@ -80,6 +80,8 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val sem_write = Valid(new SemaphoreWrite)
     // dma write spad
     val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, DIM)))
+    // dma read accumulator
+    val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMRead(ACC_ROW_ADDR_WIDTH, ev.accType, DIM)))
     val debug_sram_io = new DebugSRAMIO(DIM)
     val debug_mx_inst = if (msagaParams.unitTestBuild) Some(Flipped(Decoupled(UInt(96.W)))) else None
   })
@@ -97,9 +99,15 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     SPAD_ROWS, ev.elemType, DIM,
     nBanks = msagaParams.spadBanks, nReadPorts = 1, nWritePorts = msagaParams.nMemPorts
   )).io
+
+  /*
+   * read port 0: matrix engine
+   * read port [1, 1 + nMemPorts): dma
+   * write port 0: matrix engine
+   */
   val accRAM = Module(new BankedSRAM(
     ACC_ROWS, ev.accType, DIM,
-    nBanks = msagaParams.accBanks, nReadPorts = 1, nWritePorts = 1
+    nBanks = msagaParams.accBanks, nReadPorts = 1 + msagaParams.nMemPorts, nWritePorts = 1
   )).io
 
   Seq(spRAM.read.head, spRAM.write.head, accRAM.read.head, accRAM.write.head).foreach { x =>
@@ -129,6 +137,8 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   accRAM.read.head.valid := mxControl.io.acc_read.valid && !mxControl.io.acc_read.bits.is_constant
   accRAM.read.head.addr := mxControl.io.acc_read.bits.addr
+
+  accRAM.read.tail.zip(io.acc_read).foreach{ case (l, r) => l <> r }
 
 
   val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(msagaParams.dim))

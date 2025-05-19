@@ -66,6 +66,7 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     mxInst.ready := msaga.io.inst.ready && mxReady
 
     msaga.io.spad_write <> dma.module.io.spadWrite
+    msaga.io.acc_read <> dma.module.io.accRead
 
     dma.module.io.inst.valid := dmaInst.valid && dmaReady
     dma.module.io.inst.bits := dmaInst.bits

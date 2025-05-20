@@ -28,8 +28,12 @@ class msaga_tsi_t : public tsi_t
 
  private:
   context_t msaga_host;
+  std::string mem_dump_filename;
+  uint32_t mem_dump_start_addr;
+  uint32_t mem_dump_size;
 
   static void msaga_host_thread(void *tsi);
+  void dump_memory();
 
 };
 #endif

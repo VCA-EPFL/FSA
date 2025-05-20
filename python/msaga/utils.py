@@ -2,21 +2,6 @@ from elftools.elf.enums import *
 from elftools.elf.constants import P_FLAGS
 from elftools.elf.structs import ELFStructs
 
-from .tensor import MTile
-from .dtype import get_dtype
-from .mem import g_mem_manger
-
-import numpy as np
-
-
-def from_numpy(array: np.ndarray) -> MTile:
-    """Create a MTile from a numpy ndarray"""
-    finfo = np.finfo(array.dtype)
-    dtype = get_dtype(finfo.nexp, finfo.nmant)
-    tile = g_mem_manger.alloc_mem(array.shape, dtype=dtype)
-    tile.data = array.tobytes(order='C')
-    return tile
-
 class DictToClass:
     def __init__(self, d: dict):
         for k, v in d.items():
@@ -67,7 +52,6 @@ class ElfWriter:
 
     def __add_segment(self, addr: int, size: int, data: bytes) -> dict:
         self.data_offset = self.__align(self.data_offset)
-        print(hex(addr), size, hex(self.data_offset))
         segment = {
             'p_type': ENUM_P_TYPE_RISCV['PT_LOAD'],
             'p_offset': self.data_offset,
@@ -149,12 +133,3 @@ class ElfWriter:
                 'sh_addralign': 1,
                 'sh_entsize': 0
             })))
-
-def dump_mem_elf(filename: str) -> None:
-    # TODO: merge consecutive segments
-    segments = [
-        (x.data_ptr, x.size, x.data)
-        for x in g_mem_manger.mem_tensor_list if x.data is not None
-    ]
-    writer = ElfWriter(segments, g_mem_manger.mem.alignment)
-    writer.write_elf(filename)

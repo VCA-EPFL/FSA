@@ -1,6 +1,7 @@
+import numpy as np
 from dataclasses import dataclass
 
-@dataclass
+@dataclass(frozen=True)
 class dtype:
     itemsize: int
 
@@ -21,3 +22,14 @@ def get_dtype(ew: int, mw: int) -> dtype:
             return fp8
         case _:
             raise ValueError(f"Unknown dtype: e{ew}m{mw}")
+
+def from_numpy_dtype(n_type: np.dtype):
+    info = np.finfo(n_type)
+    return get_dtype(info.nexp, info.nmant)
+
+def to_numpy_dtype(t: dtype):
+    type_dict = {
+        fp32: np.float32,
+        fp16: np.float16,
+    }
+    return type_dict[t]

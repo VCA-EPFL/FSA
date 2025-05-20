@@ -163,7 +163,7 @@ class DMAInstructionHeader(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.func, 28, 24),
+            (self.func, 28, 25),
             (self.consumer_semaphore, 24, 17),
             (self.producer_semaphore, 16, 9),
             (self.repeat, 8, 0)
@@ -221,3 +221,22 @@ class DMAInstruction(Instruction):
             (self.sram.bits, 63, 32),
             (self.mem.bits, 127, 64),
         ))
+
+class Semaphore:
+    def __init__(self, id: int, n: int):
+        assert 0 < id < 32 and 0 < n < 8
+        self.id = id
+        self.n = n
+        self.value = 0
+
+    def inc(self) -> 'Semaphore':
+        if self.value == self.n - 1:
+            self.value = 0
+        else:
+            self.value += 1
+        return self
+
+    def to_inst_field(self) -> int:
+        #   id    v
+        # |xxxxx|xxx|
+        return (self.id << 3) | self.value

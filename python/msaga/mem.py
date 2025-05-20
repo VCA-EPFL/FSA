@@ -1,6 +1,7 @@
-from .tensor import BaseTensor, STile, ATile, MTile, T
+from .tensor import STile, ATile, MTile, T
 from .dtype import *
-from typing import Type, TypeVar
+from .config import g_config
+from typing import Type
 
 class MemoryAllocator:
     def __init__(self, addr_base: int, size: int, alignment: int):
@@ -122,9 +123,18 @@ class CompoundMemoryManger:
             raise TypeError(f"Shape must be an int or tuple of ints, got {type(shape)}")
 
 
-# TODO: do not hard code!
 g_mem_manger = CompoundMemoryManger(
-    mem_base=0x80000000, mem_size=0x10000, mem_align=8,
-    spad_base=0, spad_size=0x1000, spad_align= 4 * fp16.itemsize, spad_dtype=fp16,
-    acc_base=0, acc_size=0x1000, acc_align= 4 * fp32.itemsize, acc_dtype=fp32
+    mem_base=g_config.mem_base,
+    mem_size=g_config.mem_size,
+    mem_align=g_config.mem_align,
+
+    spad_base=g_config.spad_base,
+    spad_size=g_config.spad_size,
+    spad_align=g_config.sa_cols * g_config.e_type.itemsize,
+    spad_dtype=g_config.e_type,
+
+    acc_base=g_config.acc_base,
+    acc_size=g_config.acc_size,
+    acc_align=g_config.sa_cols * g_config.a_type.itemsize,
+    acc_dtype=g_config.a_type
 )

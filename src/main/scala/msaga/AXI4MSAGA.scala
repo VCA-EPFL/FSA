@@ -35,23 +35,57 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
 
     val memAddrWidth = memNode.out.map(_._2.bundle.addrBits).max
 
-    val busy = RegInit(false.B)
-    val rawInstQueue = Module(new Queue(UInt(instBeatBits.W), msagaParams.instructionQueueEntries, useSyncReadMem = true))
+    val s_idle :: s_active :: s_done :: Nil = Enum(3)
+    val state = RegInit(s_idle)
+    val set_active = WireInit(false.B)
+    val set_done = Wire(Bool())
+    val rawInstQueue = Module(
+      new Queue(UInt(instBeatBits.W), msagaParams.instructionQueueEntries, useSyncReadMem = true)
+    )
+    configNode.regmap(
+      0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
+      0x04 -> Seq(RegField.w(1, set_active)),
+      0x08 -> Seq(RegField.r(2, state))
+    )
+
+    switch(state) {
+      is(s_idle) {
+        when(set_active) {
+          state := s_active
+        }
+      }
+      is(s_active) {
+        when(set_done) {
+          state := s_done
+        }
+      }
+      is(s_done) {
+        when(set_active) {
+          state := s_active
+        }
+      }
+    }
+
+
     val decoder = Module(new Decoder(memAddrWidth))
     val semaphores = Module(new Semaphores(nRead = 2, nWrite = 2))
     val msaga = Module(new MSAGA(ev))
 
-    configNode.regmap(
-      0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
-      0x04 -> Seq(RegField.w(1, busy))
-    )
-
-    decoder.io.in.valid := rawInstQueue.io.deq.valid && busy
+    val is_active = state === s_active
+    decoder.io.in.valid := rawInstQueue.io.deq.valid && is_active
     decoder.io.in.bits := rawInstQueue.io.deq.bits
-    rawInstQueue.io.deq.ready := decoder.io.in.ready && busy
+    rawInstQueue.io.deq.ready := decoder.io.in.ready && is_active
 
-    val mxInst = Queue(decoder.io.outMx, pipe = true)
+    val mxInst = Queue(decoder.io.outMx, entries = msagaParams.mxInflight, pipe = true)
+    // DMA has its own load/store queues inside it
     val dmaInst = Queue(decoder.io.outDMA, pipe = true)
+
+    val dmaDone = RegNext(!(dma.module.io.busy || dmaInst.valid), init = false.B)
+    val mxDone = RegNext(!(msaga.io.busy || mxInst.valid), init = false.B)
+    val fenceReady = (!decoder.io.outFence.bits.dma || dmaDone) &&
+      (!decoder.io.outFence.bits.dma || mxDone)
+    decoder.io.outFence.ready := fenceReady
+    set_done := decoder.io.outFence.fire && decoder.io.outFence.bits.stop
 
     semaphores.io.read.head.semaphoreId := mxInst.bits.header.consumerSemId
     semaphores.io.read.head.semaphoreValue := mxInst.bits.header.consumerSemValue

@@ -87,6 +87,7 @@ class StoreHandler[A <: Data]
     val req = Flipped(Decoupled(reqGen))
     val accRead = accReadGen.cloneType
     val semWrite = Decoupled(new SemaphoreWrite)
+    val busy = Output(Bool())
   })
 
   class Entry extends Bundle {
@@ -189,7 +190,7 @@ class StoreHandler[A <: Data]
     DelayedAssert(io.req.bits.size === (io.accRead.data.asUInt.getWidth / 8).U)
   }
   io.req.ready := !entryValid(enqPtr)
-
+  io.busy := entryValid(releasePtr)
   dontTouch(io)
 }
 
@@ -201,6 +202,7 @@ class LoadHandler[E <: Data](edge: AXI4EdgeParameters, reqGen: DMARequest, nInfl
     val req = Flipped(Decoupled(reqGen))
     val semWrite = Decoupled(new SemaphoreWrite)
     val spadWrite = spadWriteGen.cloneType
+    val busy = Output(Bool())
   })
 
   require(isPow2(nInflight))
@@ -298,7 +300,7 @@ class LoadHandler[E <: Data](edge: AXI4EdgeParameters, reqGen: DMARequest, nInfl
     enqPtr := enqPtr + 1.U
   }
   io.req.ready := !entryValid(enqPtr)
-
+  io.busy := entryValid(releasePtr)
 
   dontTouch(io)
   dontTouch(rBeatCnt)
@@ -317,6 +319,7 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
     val semaphoreWrite = Valid(new SemaphoreWrite)
     val spadWrite = Vec(nPorts, new SRAMWrite(sramAddrWidth, outer.spadElem, outer.spadCols))
     val accRead = Vec(nPorts, new SRAMRead(sramAddrWidth, outer.accElem, outer.accCols))
+    val busy = Output(Bool())
   })
 
   val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
@@ -354,6 +357,12 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
       (loadHandler, storeHandler)
   }.unzip
 
+  io.busy := Cat(
+    dmaReq.valid,
+    partitioner.io.out.head.valid,
+    Cat(loadHandlers.map(_.io.busy)).orR,
+    Cat(storeHandlers.map(_.io.busy)).orR
+  ).orR
 
   val loadSemWrite = Wire(Decoupled(new SemaphoreWrite))
   val storeSemWrite = Wire(Decoupled(new SemaphoreWrite))

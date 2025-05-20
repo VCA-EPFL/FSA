@@ -10,6 +10,9 @@
 class msaga_tsi_t : public tsi_t
 {
  public:
+  static const int STATE_IDLE = 0;
+  static const int STATE_ACTIVE = 1;
+  static const int STATE_DONE = 2;
   msaga_tsi_t(int argc, char** argv);
   virtual ~msaga_tsi_t() = default;
 

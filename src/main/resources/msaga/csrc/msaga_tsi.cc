@@ -12,20 +12,19 @@ void msaga_tsi_t::msaga_host_thread(void *arg) {
 msaga_tsi_t::msaga_tsi_t(int argc, char** argv) : tsi_t(argc, argv)
 {
     msaga_host.init(msaga_host_thread, this);
-    for(auto t : target_args()) {
-        printf("targs: %s\n", t.c_str());
-    }
-    for(auto h : host_args()) {
-        printf("hargs: %s\n", h.c_str());
-    }
 }
 
 void msaga_tsi_t::run() {
     load_instructions(target_args()[0]);
-    while (!in_valid()) {
-        switch_to_target();
-    }
     reset();
+    while(!should_exit()) {
+        int state = msaga_tsi_t::STATE_IDLE;
+        while (state != msaga_tsi_t::STATE_DONE) {
+            read_chunk(0x8008, sizeof(int), &state);
+        }
+        htif_exit(0);
+    }
+    stop();
     while (true) {
         switch_to_target();
     }

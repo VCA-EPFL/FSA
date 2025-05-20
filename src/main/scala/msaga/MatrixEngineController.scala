@@ -48,6 +48,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     val pe_ctrl = Vec(DIM, Valid(new PECtrl))
     val acc_ctrl = Valid(new AccumulatorControl)
     val sem_write = Valid(new SemaphoreWrite)
+    val busy = Output(Bool())
   })
 
   val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM, impl).unzip
@@ -196,6 +197,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     !io.in.bits.header.waitPrevAcc
 
   io.in.ready := !valid.read(1) && accReady
+  io.busy := computeTimer > 0.U || accumTimer > 0.U || valid.read(1)
 
   when(RegNext(valid.read(0), false.B)) {
     assert(RegNext(PopCount(computeFlags) <= 1.U))

@@ -21,6 +21,7 @@ case class MSAGAParams(
   spadBanks: Int = 2,
   accBanks: Int = 2,
   instructionQueueEntries: Int = 256,
+  mxInflight: Int = 8,
   dmaLoadInflight: Int = 16,
   dmaStoreInflight: Int = 8,
   nMemPorts: Int = 1,
@@ -84,6 +85,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, DIM)))
     // dma read accumulator
     val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMRead(ACC_ROW_ADDR_WIDTH, ev.accType, DIM)))
+    val busy = Output(Bool())
     val debug_sram_io = new DebugSRAMIO(DIM)
     val debug_mx_inst = if (msagaParams.unitTestBuild) Some(Flipped(Decoupled(UInt(96.W)))) else None
   })
@@ -130,7 +132,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     mxControl.io.in <> io.inst
   })
   io.sem_write := mxControl.io.sem_write
-
+  io.busy := mxControl.io.busy
 
   spRAM.write.zip(io.spad_write).foreach{ case (l, r) => l <> r }
 

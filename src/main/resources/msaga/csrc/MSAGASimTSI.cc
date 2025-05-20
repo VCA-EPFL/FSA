@@ -24,7 +24,7 @@ void remove_vcs_simv_opt(int & argc, char **& argv){
     }
 }
 
-extern "C" void tsi_tick(
+extern "C" int tsi_tick(
                         int chip_id,
                         unsigned char out_valid,
                         unsigned char *out_ready,
@@ -58,4 +58,6 @@ extern "C" void tsi_tick(
     *in_valid = tsi->in_valid();
     *in_bits = tsi->in_bits();
     *out_ready = tsi->out_ready();
+
+    return tsi->done() ? (tsi->exit_code() << 1 | 1) : 0;
 }

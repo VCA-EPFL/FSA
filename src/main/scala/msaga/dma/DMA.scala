@@ -145,7 +145,7 @@ class StoreHandler[A <: Data]
   ) && (rEntry.rRepeat > rEntry.req.repeat)
   io.accRead.addr := rEntry.req.sramAddr
   writeQueue.io.enq.valid := RegNext(io.accRead.fire, init = false.B)
-  writeQueue.io.enq.bits := io.accRead.data.asTypeOf(Vec(nBeats, UInt(beatBits.W)))(rBeatCnt)
+  writeQueue.io.enq.bits := io.accRead.data.asTypeOf(Vec(nBeats, UInt(beatBits.W)))(RegEnable(rBeatCnt, io.accRead.fire))
   when(io.accRead.fire) {
     rBeatCnt := Mux(rLast, 0.U, rBeatCnt + 1.U)
     when(rLast) {

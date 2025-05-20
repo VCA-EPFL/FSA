@@ -1,17 +1,16 @@
 package msaga
 
-import org.chipsalliance.diplomacy.lazymodule._
 import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule.LazyModule
 import org.chipsalliance.diplomacy.ValName
 import testchipip.soc.{SubsystemInjector, SubsystemInjectorKey}
+import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.amba.axi4._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.prci.SynchronousCrossing
-import msaga.arithmetic._
 import chisel3._
-import chisel3.util._
-import msaga.dma.DMA
+import msaga.arithmetic._
 
 case class MSAGAInjector[E <: Data : Arithmetic, A <: Data : Arithmetic](arithmeticImpl: ArithmeticImpl[E, A])
   extends SubsystemInjector((p, baseSubsystem) => {
@@ -52,8 +51,60 @@ class WithFpMSAGA
   arithmeticImpl: ArithmeticImpl[FloatPoint, FloatPoint] = Configs.fp16MulFp32AddArithmeticImpl
 ) extends Config((site, here, up) => {
   case MSAGAKey => Some(params)
-  case SubsystemInjectorKey => up(SubsystemInjectorKey) + MSAGAInjector(arithmeticImpl)
+  case FpMSAGAImplKey => Some(arithmeticImpl)
 })
+
+class WithFpMSAGAMBusInjector extends Config((site, here, up) => {
+  case SubsystemInjectorKey => up(SubsystemInjectorKey) + MSAGAInjector(site(FpMSAGAImplKey).get)
+})
+
+case object AXI4DirectMemPortKey extends Field[Option[MemoryPortParams]](None)
+
+trait CanHaveMSAGADirectAXI4 { this: BaseSubsystem =>
+  val msagaParams = p(MSAGAKey)
+  val (msagaDomain, msaga, msaga_axi4) = msagaParams.map{ params =>
+    val fbus = locateTLBusWrapper(FBUS)
+    val mbus = locateTLBusWrapper(MBUS)
+    val domain = mbus.generateSynchronousDomain("msaga")
+    val (msaga, tlConfigNode) = domain {
+      val msaga = LazyModule(new AXI4MSAGA(p(FpMSAGAImplKey).get))
+      val tlConfigNode = TLEphemeralNode()
+      // AXI4Deinterleaver is not needed since msaga never generate interleaved resp
+      msaga.configNode :=
+        AXI4UserYanker() :=
+        TLToAXI4() :=
+        TLFragmenter(msaga.instBeatBytes, fbus.blockBytes, holdFirstDeny = true) :=
+        TLWidthWidget(fbus.beatBytes) :=
+        tlConfigNode
+      (msaga, tlConfigNode)
+    }
+    fbus.coupleTo("msaga") {
+      mbus.crossIn(tlConfigNode)(ValName("msaga_fbus_xing"))(SynchronousCrossing()) := _
+    }
+
+    val memPortParamsOpt = p(AXI4DirectMemPortKey)
+    val axi4SlaveNode = AXI4SlaveNode(memPortParamsOpt.map({ case MemoryPortParams(memPortParams, nMemoryChannels, _) =>
+      Seq.tabulate(nMemoryChannels) { channel =>
+        val base = AddressSet.misaligned(memPortParams.base, memPortParams.size)
+        val filter = AddressSet(channel * mbus.blockBytes, ~((nMemoryChannels-1) * mbus.blockBytes))
+
+        AXI4SlavePortParameters(
+          slaves = Seq(AXI4SlaveParameters(
+            address       = base.flatMap(_.intersect(filter)),
+            regionType    = RegionType.UNCACHED, // cacheable
+            executable    = true,
+            supportsWrite = TransferSizes(1, mbus.blockBytes),
+            supportsRead  = TransferSizes(1, mbus.blockBytes),
+            interleavedId = Some(0))), // slave does not interleave read responses
+          beatBytes = memPortParams.beatBytes)
+      }
+    }).toList.flatten)
+
+    axi4SlaveNode :*=* msaga.memNode
+    val msaga_axi4 = InModuleBody{ axi4SlaveNode.makeIOs() }
+    (domain, msaga, msaga_axi4)
+  }.unzip3
+}
 
 object Configs {
   lazy val smallMSAGAParams = MSAGAParams(

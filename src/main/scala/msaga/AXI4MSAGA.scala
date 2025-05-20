@@ -7,7 +7,6 @@ import org.chipsalliance.cde.config._
 import freechips.rocketchip.amba.axi4._
 import freechips.rocketchip.diplomacy.AddressSet
 import freechips.rocketchip.regmapper.RegField
-import freechips.rocketchip.subsystem.ExtMem
 import msaga.frontend.{Decoder, Semaphores}
 import msaga.arithmetic._
 import msaga.dma.DMA

@@ -9,8 +9,10 @@ import msaga.frontend.SemaphoreWrite
 import msaga.isa.{ISA, MatrixInstruction}
 import msaga.utils.DelayedAssert
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
+import msaga.arithmetic.FloatPoint
 
 case object MSAGAKey extends Field[Option[MSAGAParams]]
+case object FpMSAGAImplKey extends Field[Option[ArithmeticImpl[FloatPoint, FloatPoint]]]
 
 case class MSAGAParams(
   dim: Int,

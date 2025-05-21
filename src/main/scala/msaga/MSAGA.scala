@@ -147,7 +147,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(msagaParams.dim))
   val spConstSel = RegEnable(
-    mxControl.io.sp_read.bits.addr(ConstIdx.width - 1, 0),
+    mxControl.io.sp_read.bits.addr(SpadConstIdx.width - 1, 0),
     mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
   )
   val spConstVal = spConstList(spConstSel)
@@ -155,7 +155,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     mxControl.io.acc_read.bits.const_idx,
     mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.is_constant
   )
-  val accConstList = VecInit(ev.accType.one, ev.accType.attentionScale(msagaParams.dim))
+  val accConstList = VecInit(ev.accType.zero)
   val accConstVal = accConstList(accConstSel)
 
   inputDelayer.io.in.valid := RegNext(mxControl.io.sp_read.valid, false.B)

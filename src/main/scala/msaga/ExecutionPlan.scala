@@ -69,9 +69,8 @@ trait ExecutionPlan {
     override def toHardware(rs1: MatrixInstructionSpad, rs2: MatrixInstructionAcc)(implicit p: Parameters): AccRead = {
       val r = Wire(new AccRead())
       r.addr := rs2.addr
-      r.is_constant := const.nonEmpty.B
-      r.const_idx := DontCare
-      const.foreach(c => r.const_idx := c.idx.U)
+      r.is_constant := const.nonEmpty.B || rs2.zero
+      r.const_idx := const.map(_.idx).getOrElse(AccConstIdx.ZERO).U
       r.rmw := rmw.B
       r
     }
@@ -191,7 +190,7 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   setComparator(2 * dim + 1, 1, CmpControlCmd.PROP_MAX)
   readScratchPad(
     2 * dim + 1, 1,
-    Some(ConstRead(ConstIdx.ONE, revIn = false, revOut = false, delay = true))
+    Some(ConstRead(SpadConstIdx.ONE, revIn = false, revOut = false, delay = true))
   )
   /****** Staring from the first column, do element-wise ops ******/
   // s = s * 1 + (-m)
@@ -204,7 +203,7 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   setComparator(2 * dim + 2, 1, CmpControlCmd.PROP_MAX_DIFF)
   readScratchPad(
     2 * dim + 2, 1,
-    Some(ConstRead(ConstIdx.AttentionScale, revIn = false, revOut = false, delay = true))
+    Some(ConstRead(SpadConstIdx.AttentionScale, revIn = false, revOut = false, delay = true))
   )
   // pass down delta_m; compute (s-m) * log2e in place
   flow_ud.flow_down(2 * dim + 3, 1)
@@ -217,7 +216,7 @@ class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
   setComparator(2 * dim + 4, 1, CmpControlCmd.PROP_ZERO)
   readScratchPad(
     2 * dim + 4, 1,
-    Some(ConstRead(ConstIdx.ONE, revIn = false, revOut = false, delay = true))
+    Some(ConstRead(SpadConstIdx.ONE, revIn = false, revOut = false, delay = true))
   )
   // use mac to compute the sum of exp
   mac.flow_down(2 * dim + 5, 1)

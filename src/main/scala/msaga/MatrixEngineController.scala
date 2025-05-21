@@ -9,10 +9,15 @@ import msaga.frontend.SemaphoreWrite
 import msaga.isa._
 import msaga.utils.{DelayedAssert, Ehr}
 
-object ConstIdx {
+object SpadConstIdx {
   def width = 1
   def ONE = 0
   def AttentionScale = 1
+}
+
+object AccConstIdx {
+  def width = 1
+  def ZERO = 0
 }
 
 trait CanReadConstant {
@@ -28,7 +33,7 @@ class SpRead()(implicit p: Parameters) extends MSAGABundle with CanReadConstant 
 
 class AccRead()(implicit p: Parameters) extends MSAGABundle with CanReadConstant {
   val addr = UInt(ACC_ROW_ADDR_WIDTH.W)
-  val const_idx = UInt(ConstIdx.width.W)
+  val const_idx = UInt(AccConstIdx.width.W)
   // read-modify-write, write back SRAM next cycle if set to 1
   val rmw = Bool()
 }
@@ -102,7 +107,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   }.unzip
   io.sp_read.valid := Cat(spReadValid).orR
   io.sp_read.bits := Mux1H(spReadValid, spReadCtrl)
-  when(io.sp_read.fire && !io.sp_read.bits.is_constant) {
+  when(io.sp_read.fire) {
     // next row
     rs1.addr := (rs1.addr.zext + rs1.stride).asUInt
   }
@@ -115,7 +120,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   }.unzip
   io.acc_read.valid := Cat(accReadValid).orR
   io.acc_read.bits := Mux1H(accReadValid, accReadCtrl)
-  when(io.acc_read.fire && !io.acc_read.bits.is_constant) {
+  when(io.acc_read.fire) {
     rs2.addr := (rs2.addr.zext + rs2.stride).asUInt
   }
 

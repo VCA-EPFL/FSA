@@ -263,6 +263,11 @@ K hex:
 K float:
 {str(mat_to_numpy_array(self.K))}
 
+V hex:
+{mat_hex_str(self.V)}
+V float:
+{str(mat_to_numpy_array(self.V))}
+
 S hex:
 {mat_hex_str(self.S)}
 S float:

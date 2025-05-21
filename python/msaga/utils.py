@@ -1,6 +1,20 @@
+import numpy as np
 from elftools.elf.enums import *
 from elftools.elf.constants import P_FLAGS
 from elftools.elf.structs import ELFStructs
+
+def compare_matrices(ref: tuple[str, np.ndarray], impls: dict[str, np.ndarray]):
+    def error_metrics(a, b):
+        return {
+            'MAE': np.mean(np.abs(a - b)),
+            'MSE': np.mean((a - b) ** 2),
+            'MaxErr': np.max(np.abs(a - b)),
+            'RelErr': np.mean(np.abs((a - b) / (b + 1e-8)))
+        }
+    ref_name, ref_data = ref
+    for name, data in impls.items():
+        err = error_metrics(data, ref_data)
+        print(f'Error of {name} vs {ref_name}:', err)
 
 class DictToClass:
     def __init__(self, d: dict):

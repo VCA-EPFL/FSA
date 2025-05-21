@@ -1,10 +1,13 @@
 import os
+import torch
 import numpy as np
 import msaga as M
 from unit_test.data import *
 from msaga.tensor import MTile, ATile, STile
 
-simulator = M.VerilatorSimulator(os.path.join('..', '..', '..', 'sims', 'verilator', 'simulator-chipyard.harness-MSAGAConfig-debug'))
+simulator = M.VerilatorSimulator(
+    os.path.join('..', '..', '..', 'sims', 'verilator', 'simulator-chipyard.harness-MSAGAConfig-debug')
+)
 
 @M.kernel(engine=simulator)
 def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: int) -> MTile:
@@ -39,13 +42,16 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
 
     for i, Q_i in enumerate(Q_BLOCKS):
         M.load_tile(Q_i, Q_tile, sem_q, sem_q)
-        M.mx_load_stationary(Q_tile_rev, sem_q, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
             is_first_iter = j == 0
+            is_last_iter = j == len(K_BLOCKS) - 1
             buffer = j % 2
             K_tile, V_t_tile = K_tiles[buffer], V_t_tiles[buffer]
             sem_k, sem_v = sem_k_lst[buffer], sem_v_lst[buffer]
-
+            if is_last_iter:
+                M.mx_load_stationary(Q_tile_rev, sem_q, sem_q)
+            else:
+                M.mx_load_stationary(Q_tile_rev, sem_q, None)
             M.load_tile(K_j, K_tile, sem_k, sem_k)
             M.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k, sem_k)
 
@@ -58,37 +64,59 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     M.fence(mx=True, dma=True, stop=True)
     return O_t
 
-def ref(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray):
-    seq_q, d = Q_np.shape
+def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int) -> np.ndarray:
+    row_blocks = Q_np.shape[0] // br
+    col_blocks = K_np.shape[0] // bc
+    d = Q_np.shape[-1]
+    Q_BLOCKS = np.split(Q_np, row_blocks, axis=-2)
+    K_BLOCKS = np.split(K_np, col_blocks, axis=-2)
+    V_BLOCKS = np.split(V_np, col_blocks, axis=-2)
     backend = PyEasyFloatBackend()
-    PrevRowMax = np.full((seq_q, 1), np.float16(-np.inf))
-    PrevRowSum = np.full((seq_q, 1), np.float16(0))
-    PrevO = np.full((seq_q, d), np.float32(0))
-    tile = FlashAttentionTile(
-        Q_np, K_np, V_np,
-        PrevRowMax,
-        PrevRowSum,
-        PrevO,
-        mul_ew=5,
-        mul_mw=10,
-        acc_ew=8,
-        acc_mw=23,
-        backend=backend
-    )
-    print(str(tile))
+    for i, Q_i in enumerate(Q_BLOCKS):
+        PrevO = np.full((br, d), np.float32(0))
+        PrevRowMax = np.full((br, 1), np.float32(-np.inf))
+        PrevRowSum = np.full((br, 1), np.float32(0))
+        for j, (K_j, V_j) in enumerate(zip(K_BLOCKS, V_BLOCKS)):
+            tile = FlashAttentionTile(
+                Q_i, K_j, V_j,
+                PrevRowMax, PrevRowSum, PrevO,
+                mul_ew=5, mul_mw=10,
+                acc_ew=8, acc_mw=23,
+                backend=backend
+            )
+            PrevRowMax = tile.AccRowMaxS
+            PrevRowSum = tile.AccRowSum
+            PrevO = tile.AccO
+    return mat_to_numpy_array(tile.NormO)
 
-def main():
+def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarray:
+    Q_torch = torch.from_numpy(Q_np)
+    K_torch = torch.from_numpy(K_np)
+    V_torch = torch.from_numpy(V_np)
+    print(Q_torch.dtype)
+    O_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch)
+    return O_torch.numpy()
+
+
+def main(seq_q: int, seq_kv: int, d: int):
     np.random.seed(0)
-    Q_np = np.random.rand(4, 4).astype(np.float16)
-    K_np = np.random.rand(4, 4).astype(np.float16)
-    V_np = np.random.rand(4, 4).astype(np.float16)
-    ref(Q_np, K_np, V_np)
+    Q_np = np.random.rand(seq_q, d).astype(np.float16)
+    K_np = np.random.rand(seq_kv, d).astype(np.float16)
+    V_np = np.random.rand(seq_kv, d).astype(np.float16)
+    O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, 4, 4)
+    O_torch = ref_torch(Q_np, K_np, V_np)
     Q = M.from_numpy(Q_np)
     K = M.from_numpy(K_np)
     V_t = M.from_numpy(V_np.T)
     O_t = scaled_dot_product_attention(Q, K, V_t, 4, 4)
-    res = M.to_numpy(O_t)
-    print(res)
+    O = M.to_numpy(O_t).T
+    M.compare_matrices(
+        ref=('torch', O_torch),
+        impls={
+            'MSAGA': O,
+            'PyEasyFloat': O_pyeasyfloat
+        }
+    )
 
 if __name__ == "__main__":
-    main()
+    main(seq_q=4, seq_kv=12, d=4)

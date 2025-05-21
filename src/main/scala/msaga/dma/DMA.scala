@@ -6,22 +6,20 @@ import freechips.rocketchip.diplomacy._
 import org.chipsalliance.cde.config._
 import chisel3._
 import chisel3.util._
+import msaga.frontend.Semaphore
 import msaga.{SRAMRead, SRAMWrite}
-import msaga.isa.DMAInstruction
+import msaga.isa.{DMAInstruction, HasSemaphore}
 import msaga.isa.ISA.Constants._
-import msaga.frontend.SemaphoreWrite
 import msaga.isa.ISA.DMAFunc
-import msaga.utils.DelayedAssert
+import msaga.utils.{DelayedAssert, Ehr}
 
-class DMARequest(val sramAddrWidth: Int, val memAddrWidth: Int) extends Bundle {
+class DMARequest(val sramAddrWidth: Int, val memAddrWidth: Int) extends Bundle with HasSemaphore {
   val memAddr = UInt(memAddrWidth.W)
   val memStride = SInt(MEM_STRIDE_BITS.W)
   val sramAddr = UInt(sramAddrWidth.W)
   val sramStride = SInt(SRAM_STRIDE_BITS.W)
   val repeat = UInt(DMA_REPEAT_BITS.W)
   val size = UInt(DMA_SIZE_BITS.W)
-  val dstSemId = UInt(SEM_ID_BITS.W)
-  val dstSemValue = UInt(SEM_VALUE_BITS.W)
   val isLoad = Bool()
 }
 
@@ -29,11 +27,13 @@ class DMARequest(val sramAddrWidth: Int, val memAddrWidth: Int) extends Bundle {
 class RequestPartitioner(reqGen: DMARequest, n: Int) extends Module {
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(reqGen))
-    val out = Vec(n, Decoupled(reqGen))
+    val out = Decoupled(Vec(n, reqGen))
   })
 
   if (n == 1) {
-    io.out.head <> io.in
+    io.out.valid := io.in.valid
+    io.out.bits.head := io.in.bits
+    io.in.ready := io.out.ready
   } else {
     val reqs = Reg(Vec(n, reqGen))
     val valid = RegInit(false.B)
@@ -55,16 +55,12 @@ class RequestPartitioner(reqGen: DMARequest, n: Int) extends Module {
       }
     }
 
-    val outValid = valid && Cat(io.out.map(_.ready)).andR
-    for ((out, req) <- io.out.zip(reqs)) {
-      out.bits := req
-      /* to make semaphore write condition check easier,
-         we always allocate an entry for each port even if repeat is 0
-       */
-      out.valid := outValid
+    for ((out, req) <- io.out.bits.zip(reqs)) {
+      out := req
     }
-    io.in.ready := !valid || outValid
-    when(outValid) {
+    io.out.valid := valid
+    io.in.ready := !valid || io.out.ready
+    when(io.out.fire) {
       valid := false.B
     }
     when(io.in.fire) {
@@ -86,7 +82,8 @@ class StoreHandler[A <: Data]
     val b = Flipped(Decoupled(new AXI4BundleB(edge.bundle)))
     val req = Flipped(Decoupled(reqGen))
     val accRead = accReadGen.cloneType
-    val semWrite = Decoupled(new SemaphoreWrite)
+    val semRelease = Decoupled(new Semaphore)
+    val doSemRelease = Output(Bool())
     val busy = Output(Bool())
   })
 
@@ -172,10 +169,11 @@ class StoreHandler[A <: Data]
 
   // release
   val releaseEntry = entries(releasePtr)
-  io.semWrite.valid := entryValid(releasePtr) && releaseEntry.rRepeat === 0.U
-  io.semWrite.bits.semaphoreId := releaseEntry.req.dstSemId
-  io.semWrite.bits.semaphoreValue := releaseEntry.req.dstSemValue
-  when(io.semWrite.fire) {
+  io.semRelease.valid := entryValid(releasePtr) && releaseEntry.rRepeat === 0.U
+  io.semRelease.bits.id := releaseEntry.req.semId
+  io.semRelease.bits.value := releaseEntry.req.releaseSemValue
+  io.doSemRelease := releaseEntry.req.releaseValid
+  when(io.semRelease.fire) {
     releasePtr := releasePtr + 1.U
     entryValid(releasePtr) := false.B
   }
@@ -186,9 +184,9 @@ class StoreHandler[A <: Data]
     entries(enqPtr).rRepeat := io.req.bits.repeat
     entryValid(enqPtr) := true.B
     enqPtr := enqPtr + 1.U
-    // currently the request size must be equal to the size of accumulator row size
-    DelayedAssert(io.req.bits.size === (io.accRead.data.asUInt.getWidth / 8).U)
   }
+  // currently the request size must be equal to the size of accumulator row size
+  DelayedAssert(!io.req.fire || io.req.bits.size === (io.accRead.data.asUInt.getWidth / 8).U)
   io.req.ready := !entryValid(enqPtr)
   io.busy := entryValid(releasePtr)
   dontTouch(io)
@@ -200,7 +198,8 @@ class LoadHandler[E <: Data](edge: AXI4EdgeParameters, reqGen: DMARequest, nInfl
     val ar = Decoupled(new AXI4BundleAR(edge.bundle))
     val r = Flipped(Decoupled(new AXI4BundleR(edge.bundle)))
     val req = Flipped(Decoupled(reqGen))
-    val semWrite = Decoupled(new SemaphoreWrite)
+    val semRelease = Decoupled(new Semaphore)
+    val doSemRelease = Output(Bool())
     val spadWrite = spadWriteGen.cloneType
     val busy = Output(Bool())
   })
@@ -284,10 +283,11 @@ class LoadHandler[E <: Data](edge: AXI4EdgeParameters, reqGen: DMARequest, nInfl
 
   // semaphore update
   val releaseEntry = entries(releasePtr)
-  io.semWrite.valid := entryValid(releasePtr) && releaseEntry.rRepeat === 0.U
-  io.semWrite.bits.semaphoreId := releaseEntry.req.dstSemId
-  io.semWrite.bits.semaphoreValue := releaseEntry.req.dstSemValue
-  when(io.semWrite.fire) {
+  io.semRelease.valid := entryValid(releasePtr) && releaseEntry.rRepeat === 0.U
+  io.semRelease.bits.id := releaseEntry.req.semId
+  io.semRelease.bits.value := releaseEntry.req.releaseSemValue
+  io.doSemRelease := releaseEntry.req.releaseValid
+  when(io.semRelease.fire) {
     releasePtr := releasePtr + 1.U
     entryValid(releasePtr) := false.B
   }
@@ -316,7 +316,8 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
-    val semaphoreWrite = Valid(new SemaphoreWrite)
+    val semaphoreAcquire = Decoupled(new Semaphore)
+    val semaphoreRelease = Valid(new Semaphore)
     val spadWrite = Vec(nPorts, new SRAMWrite(sramAddrWidth, outer.spadElem, outer.spadCols))
     val accRead = Vec(nPorts, new SRAMRead(sramAddrWidth, outer.accElem, outer.accCols))
     val busy = Output(Bool())
@@ -330,23 +331,37 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
   dmaReq.bits.sramStride := io.inst.bits.sram.stride
   dmaReq.bits.repeat := io.inst.bits.header.repeat
   dmaReq.bits.size := io.inst.bits.mem.size
-  dmaReq.bits.dstSemId := io.inst.bits.header.producerSemId
-  dmaReq.bits.dstSemValue := io.inst.bits.header.producerSemValue
+  dmaReq.bits.semId := io.inst.bits.header.semId
+  dmaReq.bits.acquireValid := io.inst.bits.header.acquireValid
+  dmaReq.bits.acquireSemValue := io.inst.bits.header.acquireSemValue
+  dmaReq.bits.releaseValid := io.inst.bits.header.releaseValid
+  dmaReq.bits.releaseSemValue := io.inst.bits.header.releaseSemValue
   dmaReq.bits.isLoad := io.inst.bits.header.func === DMAFunc.LD_SRAM
   io.inst.ready := dmaReq.ready
 
   val partitioner = Module(new RequestPartitioner(chiselTypeOf(dmaReq.bits), nPorts))
   partitioner.io.in <> dmaReq
 
-  val (loadHandlers, storeHandlers) = io.spadWrite.zip(io.accRead).zip(partitioner.io.out).zip(node.out).map{
+  val acqFlag = Ehr(2, Bool(), Some(false.B))
+  val outReq = partitioner.io.out.bits.head
+  io.semaphoreAcquire.valid := partitioner.io.out.valid && outReq.acquireValid
+  io.semaphoreAcquire.bits.id := outReq.semId
+  io.semaphoreAcquire.bits.value := outReq.acquireSemValue
+  when(io.semaphoreAcquire.fire) {
+    acqFlag.write(0, true.B)
+  }
+  when(partitioner.io.out.fire) {
+    acqFlag.write(1, false.B)
+  }
+  val depReady = !outReq.acquireValid || acqFlag.read(1)
+  val (loadHandlers, storeHandlers) = io.spadWrite.zip(io.accRead).zip(partitioner.io.out.bits).zip(node.out).map{
     case (((spad, acc), req), (axi, edge)) =>
       val loadHandler = Module(new LoadHandler(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight, spad))
       val storeHandler = Module(new StoreHandler(edge, chiselTypeOf(dmaReq.bits), dmaStoreInflight, acc))
-      loadHandler.io.req.valid := req.valid && req.bits.isLoad
-      loadHandler.io.req.bits := req.bits
-      storeHandler.io.req.valid := req.valid && !req.bits.isLoad
-      storeHandler.io.req.bits := req.bits
-      req.ready := Mux(req.bits.isLoad, loadHandler.io.req.ready, storeHandler.io.req.ready)
+      loadHandler.io.req.valid := partitioner.io.out.valid && outReq.isLoad && depReady
+      loadHandler.io.req.bits := req
+      storeHandler.io.req.valid := partitioner.io.out.valid && !outReq.isLoad && depReady
+      storeHandler.io.req.bits := req
       axi.ar <> loadHandler.io.ar
       axi.aw <> storeHandler.io.aw
       loadHandler.io.r <> axi.r
@@ -357,45 +372,50 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
       (loadHandler, storeHandler)
   }.unzip
 
+  val loadReady = Cat(loadHandlers.map(_.io.req.ready)).andR
+  val storeReady = Cat(storeHandlers.map(_.io.req.ready)).andR
+  partitioner.io.out.ready := Mux(outReq.isLoad, loadReady, storeReady) && depReady
+
+
   io.busy := Cat(
     dmaReq.valid,
-    partitioner.io.out.head.valid,
+    partitioner.io.out.valid,
     Cat(loadHandlers.map(_.io.busy)).orR,
     Cat(storeHandlers.map(_.io.busy)).orR
   ).orR
 
-  val loadSemWrite = Wire(Decoupled(new SemaphoreWrite))
-  val storeSemWrite = Wire(Decoupled(new SemaphoreWrite))
+  val loadSemWrite = Wire(Decoupled(new Semaphore))
+  val storeSemWrite = Wire(Decoupled(new Semaphore))
 
-  loadSemWrite.valid := Cat(loadHandlers.map(_.io.semWrite.valid)).andR
-  loadSemWrite.bits := loadHandlers.head.io.semWrite.bits
-  loadHandlers.foreach(_.io.semWrite.ready := loadSemWrite.fire)
+  loadSemWrite.valid := Cat(loadHandlers.map(_.io.semRelease.valid)).andR
+  loadSemWrite.bits := loadHandlers.head.io.semRelease.bits
+  loadHandlers.foreach(_.io.semRelease.ready := loadSemWrite.fire)
 
-  storeSemWrite.valid := Cat(storeHandlers.map(_.io.semWrite.valid)).andR
-  storeSemWrite.bits := storeHandlers.head.io.semWrite.bits
-  storeHandlers.foreach(_.io.semWrite.ready := storeSemWrite.fire)
+  storeSemWrite.valid := Cat(storeHandlers.map(_.io.semRelease.valid)).andR
+  storeSemWrite.bits := storeHandlers.head.io.semRelease.bits
+  storeHandlers.foreach(_.io.semRelease.ready := storeSemWrite.fire)
 
-  val arb = Module(new Arbiter(new SemaphoreWrite, 2))
+  val arb = Module(new Arbiter(new Semaphore, 2))
   arb.io.in(0) <> loadSemWrite
   arb.io.in(1) <> storeSemWrite
   arb.io.out.ready := true.B
-  io.semaphoreWrite.valid := arb.io.out.valid
-  io.semaphoreWrite.bits := arb.io.out.bits
+  io.semaphoreRelease.valid := arb.io.out.valid && Mux(arb.io.in(0).fire,
+    loadHandlers.head.io.doSemRelease,
+    storeHandlers.head.io.doSemRelease
+  )
+  io.semaphoreRelease.bits := arb.io.out.bits
 
+  for (i <- 1 until nPorts) {
+    DelayedAssert(!loadSemWrite.fire ||
+      loadHandlers(i).io.semRelease.bits.asUInt === io.semaphoreRelease.bits.asUInt
+    )
+  }
+  for (i <- 1 until nPorts) {
+    DelayedAssert(!storeSemWrite.fire ||
+        storeHandlers(i).io.semRelease.bits.asUInt === io.semaphoreRelease.bits.asUInt
+    )
+  }
 
-  when(loadSemWrite.fire) {
-    /* since we only use 1 axi id, responses arrives in order
-       requests in different load handlers finish in order
-     */
-    for (i <- 1 until nPorts) {
-      DelayedAssert(loadHandlers(i).io.semWrite.bits.asUInt === io.semaphoreWrite.bits.asUInt)
-    }
-  }
-  when(storeSemWrite.fire) {
-    for (i <- 1 until nPorts) {
-      DelayedAssert(storeHandlers(i).io.semWrite.bits.asUInt === io.semaphoreWrite.bits.asUInt)
-    }
-  }
 
 }
 

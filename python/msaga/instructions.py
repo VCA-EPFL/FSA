@@ -21,7 +21,7 @@ class DMAFunc(Enum):
 
 class InstructionLike(ABC):
 
-    def combine_fields(fs: Sequence[tuple[int|bool, int, int]]):
+    def combine_fields(fs: Sequence[tuple[int|bool, int, int]]) -> int:
         bits = 0
         for x, msb, lsb in fs:
             if isinstance(x, bool):
@@ -58,6 +58,10 @@ class Instruction(InstructionLike):
             bits >>= 32
         return res
 
+    @property
+    def n_bytes(self) -> int:
+        return self.width // 8
+
 @dataclass
 class FenceInstruction(Instruction):
 
@@ -84,18 +88,24 @@ class FenceInstruction(Instruction):
 
 @dataclass
 class MatrixInstructionHeader(InstructionLike):
+    semId: int
+    acquireValid: bool
+    acquireSemValue: int
+    releaseValid: bool
+    releaseSemValue: int
     func: int
     waitPrevAcc: bool
-    consumer_semaphore: int
-    producer_semaphore: int
 
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.func, 28, 24),
-            (self.waitPrevAcc, 23, 23),
-            (self.consumer_semaphore, 22, 15),
-            (self.producer_semaphore, 14, 7)
+            (self.semId, 28, 24),
+            (self.acquireValid, 23, 23),
+            (self.acquireSemValue, 22, 20),
+            (self.releaseValid, 19, 19),
+            (self.releaseSemValue, 18, 16),
+            (self.func, 15, 11),
+            (self.waitPrevAcc, 10, 10)
         ))
 
 @dataclass
@@ -155,18 +165,24 @@ class MatrixInstruction(Instruction):
 
 @dataclass
 class DMAInstructionHeader(InstructionLike):
+    semId: int
+    acquireValid: bool
+    acquireSemValue: int
+    releaseValid: bool
+    releaseSemValue: int
     func: int
-    consumer_semaphore: int
-    producer_semaphore: int
     repeat: int
 
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.func, 28, 25),
-            (self.consumer_semaphore, 24, 17),
-            (self.producer_semaphore, 16, 9),
-            (self.repeat, 8, 0)
+            (self.semId, 28, 24),
+            (self.acquireValid, 23, 23),
+            (self.acquireSemValue, 22, 20),
+            (self.releaseValid, 19, 19),
+            (self.releaseSemValue, 18, 16),
+            (self.func, 15, 12),
+            (self.repeat, 11, 3)
         ))
 
 

@@ -42,6 +42,9 @@ def kernel(engine: BaseEngine):
             ret = func(*args, **kwargs)
             assert (ret is None) or (isinstance(ret, MTile)) or (isinstance(ret, list[MTile])), \
                 "the return type of MSAGA kernel function can only be one of MTile, list[MTile] or None"
+            inst_bytes = sum(inst.n_bytes for inst in __g_kernel_ctx.instructions)
+            assert inst_bytes <= g_config.inst_queue_size * 4, \
+                f"Instruction queue size exceeded: {inst_bytes} > {g_config.inst_queue_size * 4}"
             __g_kernel_ctx.engine.execute(
                 __g_kernel_ctx.instructions,
                 g_mem_manger.mem_tensor_list,
@@ -63,7 +66,7 @@ def fence(mx: bool, dma: bool, stop: bool) -> None:
     __g_kernel_ctx.push(FenceInstruction(mx, dma, stop))
 
 @check_kernel_ctx
-def dma(func: int, mem: MTile, tile: ATile | STile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
+def dma(func: int, mem: MTile, tile: ATile | STile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert mem.shape == tile.shape and len(mem.shape) == 2 and mem.dtype == tile.dtype
     rows, cols = mem.shape
     mem = DMAInstrucionMem(mem.data_ptr, mem.stride[-2] * mem.dtype.itemsize, cols * mem.dtype.itemsize)
@@ -72,31 +75,43 @@ def dma(func: int, mem: MTile, tile: ATile | STile, consume: Optional[Semaphore]
         __g_kernel_ctx.tile_stride(tile),
         isAccum=isinstance(tile, ATile)
     )
+    if sem is None:
+        aq, rl = False, False
     header = DMAInstructionHeader(
-        func,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0,
+        sem.id if sem else 0,
+        acquireValid=aq, acquireSemValue=sem.value if sem and aq else 0,
+        releaseValid=rl, releaseSemValue=sem.inc().value if rl else 0,
+        func=func,
         repeat=rows
     )
     __g_kernel_ctx.push(DMAInstruction(header, sram, mem))
 
 @check_kernel_ctx
-def load_tile(mem: MTile, tile: STile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
-    dma(DMAFunc.LD_SRAM.value, mem, tile, consume, produce)
+def load_tile(mem: MTile, tile: STile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
+    dma(DMAFunc.LD_SRAM.value, mem, tile, sem, aq, rl)
 
 
 @check_kernel_ctx
-def store_tile(tile: ATile, mem: MTile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
-    dma(DMAFunc.ST_SRAM.value, mem, tile, consume, produce)
+def store_tile(tile: ATile, mem: MTile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
+    dma(DMAFunc.ST_SRAM.value, mem, tile, sem, aq, rl)
 
-@check_kernel_ctx
-def mx_load_stationary(tile: STile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
-    assert len(tile.shape) == 2 and tile.shape[-1] == __g_kernel_ctx.rows
-    header = MatrixInstructionHeader(
-        MxFunc.LOAD_STATIONARY.value, False,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0
+def build_matrix_instruction_header(
+        func: int, waitPrevAcc: bool,
+        sem: Optional[Semaphore], aq: bool, rl: bool) -> MatrixInstructionHeader:
+    if sem is None:
+        aq, rl = False, False
+    return MatrixInstructionHeader(
+        sem.id if sem else 0,
+        acquireValid=aq, acquireSemValue=sem.value if sem and aq else 0,
+        releaseValid=rl, releaseSemValue=sem.inc().value if rl else 0,
+        func=func,
+        waitPrevAcc=waitPrevAcc
     )
+
+@check_kernel_ctx
+def mx_load_stationary(tile: STile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
+    assert len(tile.shape) == 2 and tile.shape[-1] == __g_kernel_ctx.rows
+    header = build_matrix_instruction_header(MxFunc.LOAD_STATIONARY.value, False, sem, aq, rl)
     spad = MatrixInstructionSpad(
         __g_kernel_ctx.tile_row_addr(tile),
         __g_kernel_ctx.tile_stride(tile),
@@ -106,12 +121,11 @@ def mx_load_stationary(tile: STile, consume: Optional[Semaphore], produce: Optio
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 
 @check_kernel_ctx
-def mx_attn_score(k: STile, l: ATile, accumulate: bool, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
+def mx_attn_score(k: STile, l: ATile, accumulate: bool, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert len(k.shape) == 2 and l.shape == (1, __g_kernel_ctx.cols)
-    header = MatrixInstructionHeader(
+    header = build_matrix_instruction_header(
         MxFunc.ATTN_SCORE.value, False,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0
+        sem, aq, rl
     )
     spad = MatrixInstructionSpad(
         __g_kernel_ctx.tile_row_addr(k),
@@ -126,12 +140,11 @@ def mx_attn_score(k: STile, l: ATile, accumulate: bool, consume: Optional[Semaph
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 
 @check_kernel_ctx
-def mx_attn_value(v_t: STile, o_t: ATile, accumulate: bool, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
+def mx_attn_value(v_t: STile, o_t: ATile, accumulate: bool, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert len(v_t.shape) == 2 and len(o_t.shape) == 2
-    header = MatrixInstructionHeader(
+    header = build_matrix_instruction_header(
         MxFunc.ATTN_VALUE.value, False,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0
+        sem, aq, rl
     )
     spad = MatrixInstructionSpad(
         __g_kernel_ctx.tile_row_addr(v_t),
@@ -146,12 +159,11 @@ def mx_attn_value(v_t: STile, o_t: ATile, accumulate: bool, consume: Optional[Se
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 
 @check_kernel_ctx
-def mx_reciprocal(tile: ATile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
+def mx_reciprocal(tile: ATile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert tile.shape == (1, __g_kernel_ctx.cols)
-    header = MatrixInstructionHeader(
+    header = build_matrix_instruction_header(
         MxFunc.ACC_RECIPROCOL.value, True,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0
+        sem, aq, rl
     )
     spad = MatrixInstructionSpad(0, 0, False, False, False)
     acc = MatrixInstrucionAcc(
@@ -162,12 +174,11 @@ def mx_reciprocal(tile: ATile, consume: Optional[Semaphore], produce: Optional[S
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 
 @check_kernel_ctx
-def mx_attn_lse_norm(tile: ATile, consume: Optional[Semaphore], produce: Optional[Semaphore]) -> None:
+def mx_attn_lse_norm(tile: ATile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert len(tile.shape) == 2 and tile.shape[-1] == __g_kernel_ctx.cols
-    header = MatrixInstructionHeader(
+    header = build_matrix_instruction_header(
         MxFunc.ATTN_LSE_NORM.value, True,
-        consume.to_inst_field() if consume else 0,
-        produce.inc().to_inst_field() if produce else 0
+        sem, aq, rl
     )
     spad = MatrixInstructionSpad(0, 0, False, False, False)
     acc = MatrixInstrucionAcc(

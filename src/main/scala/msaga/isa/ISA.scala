@@ -10,6 +10,15 @@ trait HasInstructionType { this: Bundle =>
   val instType = UInt(I_TYPE_BITS.W)
 }
 
+trait HasSemaphore { this: Bundle =>
+  val semId = UInt(SEM_ID_BITS.W)
+  val acquireValid = Bool()
+  val acquireSemValue = UInt(SEM_VALUE_BITS.W)
+  val releaseValid = Bool()
+  val releaseSemValue = UInt(SEM_VALUE_BITS.W)
+  def semBits: Int = SEM_ID_BITS + 2 * (1 + SEM_VALUE_BITS)
+}
+
 trait HasAddr {this: Bundle =>
   def addrWidth: Int
   def maxAddrWidth: Int

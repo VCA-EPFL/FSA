@@ -10,6 +10,7 @@ import freechips.rocketchip.regmapper.RegField
 import msaga.frontend.{Decoder, Semaphores}
 import msaga.arithmetic._
 import msaga.dma.DMA
+import msaga.utils.Ehr
 
 class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: ArithmeticImpl[E, A])(implicit p: Parameters) extends LazyModule {
   val instBeatBytes = 4
@@ -87,26 +88,38 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     decoder.io.outFence.ready := fenceReady
     set_done := decoder.io.outFence.fire && decoder.io.outFence.bits.stop
 
-    semaphores.io.read.head.semaphoreId := mxInst.bits.header.consumerSemId
-    semaphores.io.read.head.semaphoreValue := mxInst.bits.header.consumerSemValue
-    semaphores.io.read.last.semaphoreId := dmaInst.bits.header.consumerSemId
-    semaphores.io.read.last.semaphoreValue := dmaInst.bits.header.consumerSemValue
 
-    val mxReady :: dmaReady :: Nil = semaphores.io.read.map(_.ready).toList
+    val mxSemAcquire = semaphores.io.acquire.head
+    val mxAcqFlag = Ehr(2, Bool(), Some(false.B))
+    val mxSemRelease = semaphores.io.release.head
+    mxSemAcquire.valid := mxInst.bits.header.acquireValid && mxInst.valid
+    mxSemAcquire.bits.id := mxInst.bits.header.semId
+    mxSemAcquire.bits.value := mxInst.bits.header.acquireSemValue
+    when(mxSemAcquire.fire){
+      mxAcqFlag.write(0, true.B)
+    }
+    when(msaga.io.inst.fire) {
+      mxAcqFlag.write(1, false.B)
+    }
+    val mxDepReady = !mxInst.bits.header.acquireValid || mxAcqFlag.read(1)
 
-    msaga.io.inst.valid := mxInst.valid && mxReady
+    msaga.io.inst.valid := mxInst.valid && mxDepReady
     msaga.io.inst.bits := mxInst.bits
-    mxInst.ready := msaga.io.inst.ready && mxReady
+    mxInst.ready := msaga.io.inst.ready && mxDepReady
+
+    mxSemRelease <> msaga.io.sem_release
 
     msaga.io.spad_write <> dma.module.io.spadWrite
     msaga.io.acc_read <> dma.module.io.accRead
 
-    dma.module.io.inst.valid := dmaInst.valid && dmaReady
-    dma.module.io.inst.bits := dmaInst.bits
-    dmaInst.ready := dma.module.io.inst.ready && dmaReady
+    dma.module.io.inst <> dmaInst
 
-    semaphores.io.write.head := msaga.io.sem_write
-    semaphores.io.write.last := dma.module.io.semaphoreWrite
+    val dmaSemAcquire = semaphores.io.acquire.last
+    val dmaSemRelease = semaphores.io.release.last
+
+    dmaSemAcquire <> dma.module.io.semaphoreAcquire
+    dmaSemRelease <> dma.module.io.semaphoreRelease
+
     //TODO
     msaga.io.debug_sram_io <> DontCare
   }

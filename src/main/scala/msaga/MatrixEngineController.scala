@@ -5,7 +5,7 @@ import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
 import msaga.sa._
 import msaga.arithmetic._
-import msaga.frontend.SemaphoreWrite
+import msaga.frontend.Semaphore
 import msaga.isa._
 import msaga.utils.{DelayedAssert, Ehr}
 
@@ -52,7 +52,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     val cmp_ctrl = Valid(new CmpControl)
     val pe_ctrl = Vec(DIM, Valid(new PECtrl))
     val acc_ctrl = Valid(new AccumulatorControl)
-    val sem_write = Valid(new SemaphoreWrite)
+    val sem_release = Valid(new Semaphore)
     val busy = Output(Bool())
   })
 
@@ -64,7 +64,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   val rs2_deq_ptr = RegInit(0.U(1.W))
   val rs2_enq_ptr = RegInit(0.U(1.W))
   val rs2 = rs2_queue(rs2_deq_ptr)
-  val semahpore_queue = Module(new Queue(new SemaphoreWrite, entries = 2, pipe = true))
+  val semahpore_queue = Module(new Queue(new Semaphore, entries = 2, pipe = true))
 
   val planSel = planFunc.map(func => func === io.in.bits.header.func)
   val requireAccum = Mux1H(planSel, allPlans.map(_.accumulateMaxCycle > 0).map(_.B))
@@ -73,12 +73,12 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     rs2_queue(rs2_enq_ptr) := io.in.bits.acc
     rs2_enq_ptr := rs2_enq_ptr + 1.U
   }
-  semahpore_queue.io.enq.valid := io.in.fire && hasDstSemaphore
-  semahpore_queue.io.enq.bits.semaphoreId := io.in.bits.header.producerSemId
-  semahpore_queue.io.enq.bits.semaphoreValue := io.in.bits.header.producerSemValue
+  semahpore_queue.io.enq.valid := io.in.fire && hasDstSemaphore && io.in.bits.header.releaseValid
+  semahpore_queue.io.enq.bits.id := io.in.bits.header.semId
+  semahpore_queue.io.enq.bits.value := io.in.bits.header.releaseSemValue
   DelayedAssert(semahpore_queue.io.enq.ready)
-  io.sem_write.valid := semahpore_queue.io.deq.fire
-  io.sem_write.bits := semahpore_queue.io.deq.bits
+  io.sem_release.valid := semahpore_queue.io.deq.fire
+  io.sem_release.bits := semahpore_queue.io.deq.bits
 
   // Make valid a EHR to allow back-to-back execution
   val valid = Ehr(2, Bool(), Some(false.B))

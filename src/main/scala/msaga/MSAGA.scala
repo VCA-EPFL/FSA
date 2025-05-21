@@ -5,7 +5,7 @@ import chisel3.util._
 import msaga.arithmetic.{Arithmetic, ArithmeticImpl, HasArithmeticParams}
 import msaga.sa._
 import msaga.arithmetic.ArithmeticSyntax._
-import msaga.frontend.SemaphoreWrite
+import msaga.frontend.Semaphore
 import msaga.isa.{ISA, MatrixInstruction}
 import msaga.utils.DelayedAssert
 import org.chipsalliance.cde.config.{Config, Field, Parameters}
@@ -80,7 +80,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
-    val sem_write = Valid(new SemaphoreWrite)
+    val sem_release = Valid(new Semaphore)
     // dma write spad
     val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, DIM)))
     // dma read accumulator
@@ -131,7 +131,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   }.getOrElse({
     mxControl.io.in <> io.inst
   })
-  io.sem_write := mxControl.io.sem_write
+  io.sem_release := mxControl.io.sem_release
   io.busy := mxControl.io.busy
 
   spRAM.write.zip(io.spad_write).foreach{ case (l, r) => l <> r }

@@ -4,6 +4,7 @@ from .dtype import *
 class MSAGAConfig:
     sa_rows: int = 4
     sa_cols: int = 4
+    inst_queue_size: int = 256
     e_type: dtype = fp16
     a_type: dtype = fp32
     mem_base: int = 0x80000000

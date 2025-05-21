@@ -6,7 +6,8 @@ from unit_test.data import *
 from msaga.tensor import MTile, ATile, STile
 
 simulator = M.VerilatorSimulator(
-    os.path.join('..', '..', '..', 'sims', 'verilator', 'simulator-chipyard.harness-MSAGAConfig-debug')
+    os.path.join('..', '..', '..', 'sims', 'verilator', 'simulator-chipyard.harness-MSAGAConfig-debug'),
+    vcdfile=os.path.join('..', '..', '..', 'sims', 'verilator', 'sim.vcd'),
 )
 
 @M.kernel(engine=simulator)
@@ -41,26 +42,25 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     sem_o = M.Semaphore(id=6, n=2)
 
     for i, Q_i in enumerate(Q_BLOCKS):
-        M.load_tile(Q_i, Q_tile, sem_q, sem_q)
+        M.load_tile(Q_i, Q_tile, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
             is_first_iter = j == 0
             is_last_iter = j == len(K_BLOCKS) - 1
             buffer = j % 2
             K_tile, V_t_tile = K_tiles[buffer], V_t_tiles[buffer]
             sem_k, sem_v = sem_k_lst[buffer], sem_v_lst[buffer]
-            if is_last_iter:
-                M.mx_load_stationary(Q_tile_rev, sem_q, sem_q)
-            else:
-                M.mx_load_stationary(Q_tile_rev, sem_q, None)
-            M.load_tile(K_j, K_tile, sem_k, sem_k)
-            M.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k, sem_k)
 
-            M.load_tile(V_t_j, V_t_tile, sem_v, sem_v)
-            M.mx_attn_value(V_t_tile, O_t_tile, not is_first_iter, sem_v, sem_v)
+            M.mx_load_stationary(Q_tile_rev, sem_q, aq=is_first_iter, rl=is_last_iter)
+
+            M.load_tile(K_j, K_tile, sem_k)
+            M.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k)
+
+            M.load_tile(V_t_j, V_t_tile, sem_v)
+            M.mx_attn_value(V_t_tile, O_t_tile, not is_first_iter, sem_v)
         # end inner loop
-        M.mx_reciprocal(L_tile, None, None)
-        M.mx_attn_lse_norm(O_t_tile, None, sem_o)
-        M.store_tile(O_t_tile, O_t_BLOCKS[i], sem_o, sem_o)
+        M.mx_reciprocal(L_tile, None)
+        M.mx_attn_lse_norm(O_t_tile, sem_o, aq=False, rl=True)
+        M.store_tile(O_t_tile, O_t_BLOCKS[i], sem_o)
     M.fence(mx=True, dma=True, stop=True)
     return O_t
 
@@ -72,6 +72,7 @@ def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: in
     K_BLOCKS = np.split(K_np, col_blocks, axis=-2)
     V_BLOCKS = np.split(V_np, col_blocks, axis=-2)
     backend = PyEasyFloatBackend()
+    res = []
     for i, Q_i in enumerate(Q_BLOCKS):
         PrevO = np.full((br, d), np.float32(0))
         PrevRowMax = np.full((br, 1), np.float32(-np.inf))
@@ -87,13 +88,13 @@ def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: in
             PrevRowMax = tile.AccRowMaxS
             PrevRowSum = tile.AccRowSum
             PrevO = tile.AccO
-    return mat_to_numpy_array(tile.NormO)
+        res.append(mat_to_numpy_array(tile.NormO))
+    return np.concatenate(res, axis=0)
 
 def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarray:
     Q_torch = torch.from_numpy(Q_np)
     K_torch = torch.from_numpy(K_np)
     V_torch = torch.from_numpy(V_np)
-    print(Q_torch.dtype)
     O_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch)
     return O_torch.numpy()
 
@@ -119,4 +120,4 @@ def main(seq_q: int, seq_kv: int, d: int):
     )
 
 if __name__ == "__main__":
-    main(seq_q=4, seq_kv=12, d=4)
+    main(seq_q=4, seq_kv=4, d=4)

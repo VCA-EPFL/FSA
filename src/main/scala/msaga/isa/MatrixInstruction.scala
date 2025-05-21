@@ -3,14 +3,10 @@ package msaga.isa
 import chisel3._
 import ISA.Constants._
 
-class MatrixInstructionHeader extends NBytesBundle(4) with HasInstructionType {
+class MatrixInstructionHeader extends NBytesBundle(4) with HasInstructionType with HasSemaphore {
   val func = UInt(MX_FUNC_BITS.W)
   val waitPrevAcc = Bool()
-  val consumerSemId = UInt(SEM_ID_BITS.W)
-  val consumerSemValue = UInt(SEM_VALUE_BITS.W)
-  val producerSemId = UInt(SEM_ID_BITS.W)
-  val producerSemValue = UInt(SEM_VALUE_BITS.W)
-  val _pad = padOpt(I_TYPE_BITS + MX_FUNC_BITS + 1 + 2 * (SEM_ID_BITS + SEM_VALUE_BITS))
+  val _pad = padOpt(I_TYPE_BITS + semBits + MX_FUNC_BITS + 1)
   checkWidth()
 }
 

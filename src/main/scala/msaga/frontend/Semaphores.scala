@@ -2,34 +2,34 @@ package msaga.frontend
 
 import chisel3._
 import chisel3.util._
-
 import msaga.isa.ISA.Constants._
 
-class SemaphoreRead extends Bundle {
-  val semaphoreId = Input(UInt(SEM_ID_BITS.W))
-  val semaphoreValue = Input(UInt(SEM_VALUE_BITS.W))
-  val ready = Output(Bool())
+class Semaphore extends Bundle {
+  val id = UInt(SEM_ID_BITS.W)
+  val value = UInt(SEM_VALUE_BITS.W)
 }
 
-class SemaphoreWrite extends Bundle {
-  val semaphoreId = UInt(SEM_ID_BITS.W)
-  val semaphoreValue = UInt(SEM_VALUE_BITS.W)
-}
 
 class Semaphores(nRead: Int, nWrite: Int) extends Module {
   val io = IO(new Bundle {
-    val read = Vec(nRead, new SemaphoreRead)
-    val write = Vec(nWrite, Flipped(Valid(new SemaphoreWrite)))
+    val acquire = Vec(nRead, Flipped(Decoupled(new Semaphore)))
+    val release = Vec(nWrite, Flipped(Valid(new Semaphore)))
   })
 
   val semaphores = RegInit(VecInit(Seq.fill(N_SEMAPHORES){0.U(SEM_VALUE_BITS.W)}))
+  val busy = RegInit(VecInit(Seq.fill(N_SEMAPHORES){ false.B }))
 
-  io.read.foreach{ r =>
-    r.ready := r.semaphoreId === 0.U || semaphores(r.semaphoreId) === r.semaphoreValue
+  io.release.foreach{ release =>
+    when(release.fire) {
+      busy(release.bits.id) := false.B
+      semaphores(release.bits.id) := release.bits.value
+    }
   }
-  io.write.foreach{ w =>
-    when(w.valid) {
-      semaphores(w.bits.semaphoreId) := w.bits.semaphoreValue
+
+  io.acquire.foreach{ acq =>
+    acq.ready := !busy(acq.bits.id) && acq.bits.value === semaphores(acq.bits.id)
+    when(acq.fire) {
+      busy(acq.bits.id) := true.B
     }
   }
 

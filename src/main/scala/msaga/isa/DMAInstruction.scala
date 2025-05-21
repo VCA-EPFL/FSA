@@ -3,14 +3,10 @@ package msaga.isa
 import chisel3._
 import ISA.Constants._
 
-class DMAInstructionHeader extends NBytesBundle(4) with HasInstructionType {
+class DMAInstructionHeader extends NBytesBundle(4) with HasInstructionType with HasSemaphore {
   val func = UInt(DMA_FUNC_BITS.W)
-  val consumerSemId = UInt(SEM_ID_BITS.W)
-  val consumerSemValue = UInt(SEM_VALUE_BITS.W)
-  val producerSemId = UInt(SEM_ID_BITS.W)
-  val producerSemValue = UInt(SEM_VALUE_BITS.W)
   val repeat = UInt(DMA_REPEAT_BITS.W)
-  val _pad = padOpt(I_TYPE_BITS + DMA_FUNC_BITS + 2 * (SEM_ID_BITS + SEM_VALUE_BITS) + DMA_REPEAT_BITS)
+  val _pad = padOpt(I_TYPE_BITS + semBits + DMA_FUNC_BITS + DMA_REPEAT_BITS)
   checkWidth()
 }
 

@@ -6,11 +6,12 @@ import msaga.arithmetic._
 import msaga.arithmetic.ArithmeticSyntax._
 
 object CmpControlCmd {
-  def width = 2
+  def width = 3
   def UPDATE = 0.U(width.W)
   def PROP_MAX = 1.U(width.W)
   def PROP_MAX_DIFF = 2.U(width.W)
   def PROP_ZERO = 3.U(width.W)
+  def RESET = 4.U(width.W)
 }
 
 class CmpControl extends Bundle {
@@ -36,20 +37,26 @@ class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, 
   val prop_new_max = cmd === CmpControlCmd.PROP_MAX
   val prop_diff = cmd === CmpControlCmd.PROP_MAX_DIFF
   val prop_zero = cmd === CmpControlCmd.PROP_ZERO
+  val do_reset = cmd === CmpControlCmd.RESET
   val zero = accType.zero
 
   cmpUnit.io.in_a := Mux(update_new_max, io.d_input.bits, Mux(prop_new_max, zero, oldMax))
   cmpUnit.io.in_b := newMax
 
   when(io.in_ctrl.fire) {
-    newMax := cmpUnit.io.out_max
-    when(prop_diff) {
-      oldMax := cmpUnit.io.out_max
-    }
+    when(do_reset) {
+      newMax := accType.minimum
+      oldMax := accType.minimum
+    }.otherwise({
+      newMax := cmpUnit.io.out_max
+      when(prop_diff) {
+        oldMax := cmpUnit.io.out_max
+      }
+    })
   }
 
   val downCastDIn = ev.viewEasA(ev.cvtAtoE(io.d_input.bits))
   io.d_output.bits := Mux(prop_zero, zero, Mux(update_new_max, downCastDIn, cmpUnit.io.out_diff))
-  io.d_output.valid := io.in_ctrl.valid
+  io.d_output.valid := io.in_ctrl.valid && !do_reset
   io.out_ctrl := io.in_ctrl
 }

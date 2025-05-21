@@ -261,6 +261,7 @@ class AttentionLseNormScale
 
 // perform the final lse norm after each flash attention inner loop
 class AttentionLseNorm(val dim: Int) extends ExecutionPlan {
+  setComparator(0, 1, CmpControlCmd.RESET)
   readAccRAM(0, dim, None)
   setAccumulator(1, dim, AccumulatorCmd.ACC)
   releaseSemaphore(dim)

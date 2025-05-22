@@ -8,7 +8,7 @@ import org.chipsalliance.cde.config.Config
 object MSAGAGen {
   def main(args: Array[String]): Unit = {
     val genArgs = GenOptions.parseArgs(args)
-    val params = MSAGAParams(genArgs.dim, genArgs.spRows, genArgs.accRows)
+    val params = MSAGAParams(genArgs.dim, genArgs.dim, genArgs.spRows, genArgs.accRows)
     implicit val config: Config = new Config((_, _, _) => {
       case MSAGAKey => Some(params.copy(unitTestBuild = true))
     })

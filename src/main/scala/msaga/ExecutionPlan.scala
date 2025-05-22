@@ -24,13 +24,14 @@ trait HasEffRange {
 }
 
 trait ExecutionPlan {
-  val dim: Int
+  val rows: Int
+  val cols: Int
   // PE control signals are more complex than spad/acc/cmp control, use a dedicate `ControlGen` to optimize them
-  val pe_signals = (0 until 9).map(_ => ControlGen(dim)).toList
+  val pe_signals = (0 until 9).map(_ => ControlGen(rows)).toList
   val mac :: acc_ui :: load_reg_li :: load_reg_ui :: flow_lr :: flow_ud :: flow_du :: update_reg :: exp2 :: Nil = pe_signals
 
   def genPECtrl(timer: UInt, valid: Bool): Vec[PECtrl] = {
-    val pe_ctrl = Wire(Vec(dim, new PECtrl))
+    val pe_ctrl = Wire(Vec(rows, new PECtrl))
     pe_signals
       .zip(pe_ctrl.map(_.getCtrlElements).transpose)
       .foreach { case (gen, ctrlBits) =>
@@ -158,99 +159,103 @@ trait ExecutionPlan {
 
 }
 
-class LoadStationary(val dim: Int) extends ExecutionPlan {
+class LoadStationary(val rows: Int, val cols: Int) extends ExecutionPlan {
   // read Q from spad
-  readScratchPad(0, dim, None)
+  readScratchPad(0, cols, None)
   // release the semaphore immediately at the last cycle of reading sram
-  releaseSemaphore(dim - 1)
+  releaseSemaphore(cols - 1)
   // load into systolic array
-  load_reg_li.parallel(1, dim)
+  load_reg_li.parallel(1, cols)
 }
 
-class AttentionScoreExecPlan(val dim: Int) extends ExecutionPlan {
+class AttentionScoreExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan {
   /****** S = Q @ K ******/
   // read K from spad
-  readScratchPad(0, dim, None)
+  readScratchPad(0, rows, None)
   // release the semaphore immediately at the last cycle of reading sram
-  releaseSemaphore(dim - 1)
+  releaseSemaphore(rows - 1)
   // stream in K, multiply with Q from bottom left of the SA
-  mac.flow_up(1, dim)
-  flow_lr.flow_up(1, dim)
+  mac.flow_up(1, rows)
+  flow_lr.flow_up(1, rows)
 
   /****** Put S back to systolic array ******/
-  flow_ud.flow_down(dim + 1, dim)
+  // the operations above takes `rows` cycles (the first element of
+  // S = Q @ Kt reaches the upper left of the SA),
+  // so we need to wait for `rows` cycles before we can read S from the SA
+  flow_ud.flow_down(rows + 1, rows)
   // meanwhile, update the row max
-  setComparator(dim + 1, dim, CmpControlCmd.UPDATE)
+  setComparator(rows + 1, rows, CmpControlCmd.UPDATE)
 
   /****** Flow zero bottom-up for later exp sum ******/
-  flow_du.flow_up(dim + 4, dim)
+  flow_du.flow_up(rows + 4, rows)
 
   // prepare input for next cycle
-  load_reg_ui.parallel(2 * dim + 1, 1)
-  setComparator(2 * dim + 1, 1, CmpControlCmd.PROP_MAX)
+  load_reg_ui.parallel(2 * rows + 1, 1)
+  setComparator(2 * rows + 1, 1, CmpControlCmd.PROP_MAX)
   readScratchPad(
-    2 * dim + 1, 1,
+    2 * rows + 1, 1,
     Some(ConstRead(SpadConstIdx.ONE, revIn = false, revOut = false, delay = true))
   )
   /****** Staring from the first column, do element-wise ops ******/
   // s = s * 1 + (-m)
-  update_reg.flow_down(2 * dim + 2, 1)
-  acc_ui.flow_down(2 * dim + 2, 1)
-  flow_ud.flow_down(2 * dim + 2, 1)
-  flow_lr.flow_down(2 * dim + 2, 1)
+  update_reg.flow_down(2 * rows + 2, 1)
+  acc_ui.flow_down(2 * rows + 2, 1)
+  flow_ud.flow_down(2 * rows + 2, 1)
+  flow_lr.flow_down(2 * rows + 2, 1)
 
   // prepare input for next cycle
-  setComparator(2 * dim + 2, 1, CmpControlCmd.PROP_MAX_DIFF)
+  setComparator(2 * rows + 2, 1, CmpControlCmd.PROP_MAX_DIFF)
   readScratchPad(
-    2 * dim + 2, 1,
+    2 * rows + 2, 1,
     Some(ConstRead(SpadConstIdx.AttentionScale, revIn = false, revOut = false, delay = true))
   )
   // pass down delta_m; compute (s-m) * log2e in place
-  flow_ud.flow_down(2 * dim + 3, 1)
-  update_reg.flow_down(2 * dim + 3, 1) // acc_ui is false, not need to control
-  flow_lr.flow_down(2 * dim + 3, 1)
+  flow_ud.flow_down(2 * rows + 3, 1)
+  update_reg.flow_down(2 * rows + 3, 1) // acc_ui is false, not need to control
+  flow_lr.flow_down(2 * rows + 3, 1)
   // use pow2 to generate exp
-  exp2.flow_down(2 * dim + 4, 1)
+  exp2.flow_down(2 * rows + 4, 1)
 
   // prepare input for next cycle
-  setComparator(2 * dim + 4, 1, CmpControlCmd.PROP_ZERO)
+  setComparator(2 * rows + 4, 1, CmpControlCmd.PROP_ZERO)
   readScratchPad(
-    2 * dim + 4, 1,
+    2 * rows + 4, 1,
     Some(ConstRead(SpadConstIdx.ONE, revIn = false, revOut = false, delay = true))
   )
   // use mac to compute the sum of exp
-  mac.flow_down(2 * dim + 5, 1)
-  acc_ui.flow_down(2 * dim + 5, 1)
-  flow_lr.flow_down(2 * dim + 5, 1)
+  mac.flow_down(2 * rows + 5, 1)
+  acc_ui.flow_down(2 * rows + 5, 1)
+  flow_lr.flow_down(2 * rows + 5, 1)
 
   // collect diff = row_max(i-1) - row_max(i), and compute exp(diff)
-  setAccumulator(4 * dim + 3, 1, AccumulatorCmd.EXP_S1)
-  setAccumulator(4 * dim + 4, 1, AccumulatorCmd.EXP_S2)
+  setAccumulator(2 * rows + rows + cols + 2, 1, AccumulatorCmd.EXP_S1)
+  setAccumulator(2 * rows + rows + cols + 3, 1, AccumulatorCmd.EXP_S2)
   // update exp sum
-  readAccRAM(4 * dim + 4, 1, None)
-  setAccumulator(4 * dim + 5, 1, AccumulatorCmd.ACC_SA)
+  readAccRAM(2 * rows + rows + cols + 3, 1, None)
+  setAccumulator(2 * rows + rows + cols + 4, 1, AccumulatorCmd.ACC_SA)
 }
 
-class AttentionValueExecPlan(val dim: Int) extends ExecutionPlan {
+class AttentionValueExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan {
   /****** O = P @ V ******/
   // read V from spad
-  readScratchPad(0, dim, None)
+  readScratchPad(0, rows, None)
   // release the semaphore immediately at the last cycle of reading sram
-  releaseSemaphore(dim - 1)
+  releaseSemaphore(rows - 1)
   // V enters the SA from upper left
-  mac.flow_down(1, dim)
-  acc_ui.flow_down(1, dim)
-  flow_lr.flow_down(1, dim)
+  mac.flow_down(1, rows)
+  acc_ui.flow_down(1, rows)
+  flow_lr.flow_down(1, rows)
   // read old O out from accumulator sram
-  readAccRAM(2 * dim - 1, dim, None)
+  readAccRAM(rows + cols - 1, rows, None)
   // accumulate, update O
-  setAccumulator(2 * dim, dim, AccumulatorCmd.ACC_SA)
+  setAccumulator(rows + cols, rows, AccumulatorCmd.ACC_SA)
 }
 
 // load one row from AccRAM to accumulator and get the reciprocal
 class AttentionLseNormScale
 (
-  val dim: Int,
+  val rows: Int,
+  val cols: Int,
   ap: HasArithmeticParams
 ) extends ExecutionPlan {
   readAccRAM(0, 1, None, rmw = false)
@@ -260,9 +265,9 @@ class AttentionLseNormScale
 }
 
 // perform the final lse norm after each flash attention inner loop
-class AttentionLseNorm(val dim: Int) extends ExecutionPlan {
+class AttentionLseNorm(val rows: Int, val cols: Int) extends ExecutionPlan {
   setComparator(0, 1, CmpControlCmd.RESET)
-  readAccRAM(0, dim, None)
-  setAccumulator(1, dim, AccumulatorCmd.ACC)
-  releaseSemaphore(dim)
+  readAccRAM(0, rows, None)
+  setAccumulator(1, rows, AccumulatorCmd.ACC)
+  releaseSemaphore(rows)
 }

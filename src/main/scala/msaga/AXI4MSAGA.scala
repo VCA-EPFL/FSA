@@ -26,9 +26,9 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     dmaLoadInflight = msagaParams.dmaLoadInflight,
     dmaStoreInflight = msagaParams.dmaStoreInflight,
     spadElem = ev.elemType,
-    spadCols = msagaParams.dim,
+    spadCols = msagaParams.saRows,
     accElem = ev.accType,
-    accCols = msagaParams.dim
+    accCols = msagaParams.saCols
   ))
   val memNode = dma.node
 
@@ -120,8 +120,6 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     dmaSemAcquire <> dma.module.io.semaphoreAcquire
     dmaSemRelease <> dma.module.io.semaphoreRelease
 
-    //TODO
-    msaga.io.debug_sram_io <> DontCare
   }
 }
 

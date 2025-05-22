@@ -15,7 +15,8 @@ case object MSAGAKey extends Field[Option[MSAGAParams]]
 case object FpMSAGAImplKey extends Field[Option[ArithmeticImpl[FloatPoint, FloatPoint]]]
 
 case class MSAGAParams(
-  dim: Int,
+  saRows: Int,
+  saCols: Int,
   spadRows: Int,
   accRows: Int,
   spadBanks: Int = 2,
@@ -25,13 +26,13 @@ case class MSAGAParams(
   dmaLoadInflight: Int = 16,
   dmaStoreInflight: Int = 8,
   nMemPorts: Int = 1,
-  supportedExecutionPlans: (Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
-    (dim, ap) => Seq(
-      ISA.MxFunc.LOAD_STATIONARY -> new LoadStationary(dim),
-      ISA.MxFunc.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(dim),
-      ISA.MxFunc.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(dim),
-      ISA.MxFunc.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(dim, ap),
-      ISA.MxFunc.ATTENTION_LSE_NORM -> new AttentionLseNorm(dim)
+  supportedExecutionPlans: (Int, Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
+    (rows, cols, ap) => Seq(
+      ISA.MxFunc.LOAD_STATIONARY -> new LoadStationary(rows, cols),
+      ISA.MxFunc.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(rows, cols),
+      ISA.MxFunc.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(rows, cols),
+      ISA.MxFunc.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(rows, cols, ap),
+      ISA.MxFunc.ATTENTION_LSE_NORM -> new AttentionLseNorm(rows, cols)
     )
   },
   unitTestBuild: Boolean = false
@@ -45,8 +46,8 @@ case class MSAGAParams(
 trait HasMSAGAParams {
   implicit val p: Parameters
   val msagaParams = p(MSAGAKey).get
-  def DIM = msagaParams.dim
-  def DIM_WIDTH = log2Up(msagaParams.dim)
+  def SA_ROWS = msagaParams.saRows
+  def SA_COLS = msagaParams.saCols
 
   def SPAD_ROWS = msagaParams.spadRows
   def SPAD_ROW_ADDR_WIDTH = msagaParams.spadAddrWidth
@@ -82,25 +83,20 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
     val sem_release = Valid(new Semaphore)
     // dma write spad
-    val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, DIM)))
+    val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, SA_ROWS)))
     // dma read accumulator
-    val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMRead(ACC_ROW_ADDR_WIDTH, ev.accType, DIM)))
+    val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMRead(ACC_ROW_ADDR_WIDTH, ev.accType, SA_COLS)))
     val busy = Output(Bool())
-    val debug_sram_io = new DebugSRAMIO(DIM)
-    val debug_mx_inst = if (msagaParams.unitTestBuild) Some(Flipped(Decoupled(UInt(96.W)))) else None
   })
 
   val mxControl = Module(new MatrixEngineController(ev))
-  val inputDelayer = Module(new InputDelayer(DIM, arithmeticImpl.elemType))
-  val outputDelayer = Module(new OutputDelayer(DIM, arithmeticImpl.accType))
-  val sa = Module(new SystolicArray[E, A](DIM, DIM))
-  val accumulator = Module(new Accumulator[A](DIM, DIM, ev.accType, ev.accUnit _))
-
-  // TODO
-  io.debug_sram_io <> DontCare
+  val inputDelayer = Module(new InputDelayer(SA_ROWS, arithmeticImpl.elemType))
+  val outputDelayer = Module(new OutputDelayer(SA_COLS, arithmeticImpl.accType))
+  val sa = Module(new SystolicArray[E, A](SA_ROWS, SA_COLS))
+  val accumulator = Module(new Accumulator[A](SA_ROWS, SA_COLS, ev.accType, ev.accUnit _))
 
   val spRAM = Module(new BankedSRAM(
-    SPAD_ROWS, ev.elemType, DIM,
+    SPAD_ROWS, ev.elemType, SA_ROWS,
     nBanks = msagaParams.spadBanks, nReadPorts = 1, nWritePorts = msagaParams.nMemPorts
   )).io
 
@@ -110,7 +106,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
    * write port 0: matrix engine
    */
   val accRAM = Module(new BankedSRAM(
-    ACC_ROWS, ev.accType, DIM,
+    ACC_ROWS, ev.accType, SA_COLS,
     nBanks = msagaParams.accBanks, nReadPorts = 1 + msagaParams.nMemPorts, nWritePorts = 1
   )).io
 
@@ -118,19 +114,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     DelayedAssert(!x.valid || x.ready)
   }
 
-  io.debug_mx_inst.map { inst =>
-    dontTouch(mxControl.io)
-    dontTouch(inputDelayer.io)
-    dontTouch(outputDelayer.io)
-    dontTouch(sa.io)
-    dontTouch(accumulator.io)
-    io.inst.ready := false.B
-    mxControl.io.in.valid := inst.valid
-    mxControl.io.in.bits := inst.bits.asTypeOf(mxControl.io.in.bits)
-    inst.ready := mxControl.io.in.ready
-  }.getOrElse({
-    mxControl.io.in <> io.inst
-  })
+  mxControl.io.in <> io.inst
   io.sem_release := mxControl.io.sem_release
   io.busy := mxControl.io.busy
 
@@ -145,7 +129,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   accRAM.read.tail.zip(io.acc_read).foreach{ case (l, r) => l <> r }
 
 
-  val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(msagaParams.dim))
+  val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(SA_ROWS))
   val spConstSel = RegEnable(
     mxControl.io.sp_read.bits.addr(SpadConstIdx.width - 1, 0),
     mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
@@ -160,7 +144,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   inputDelayer.io.in.valid := RegNext(mxControl.io.sp_read.valid, false.B)
   inputDelayer.io.in.bits.data := Mux(RegNext(mxControl.io.sp_read.bits.is_constant),
-    VecInit(Seq.fill(DIM)(spConstVal)),
+    VecInit(Seq.fill(SA_ROWS)(spConstVal)),
     spRAM.read.head.data
   )
   inputDelayer.io.in.bits.rev_input := RegNext(mxControl.io.sp_read.bits.rev_sram_out)
@@ -175,7 +159,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   accumulator.io.sa_in := outputDelayer.io.out
   accumulator.io.sram_in := Mux(RegNext(mxControl.io.acc_read.bits.is_constant),
-    VecInit(Seq.fill(DIM)(accConstVal)),
+    VecInit(Seq.fill(SA_COLS)(accConstVal)),
     accRAM.read.head.data
   )
   accumulator.io.ctrl_in := mxControl.io.acc_ctrl
@@ -183,5 +167,5 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   accRAM.write.head.valid := RegNext(mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.rmw, false.B)
   accRAM.write.head.addr := RegNext(mxControl.io.acc_read.bits.addr)
   accRAM.write.head.data := accumulator.io.sram_out
-  accRAM.write.head.mask := VecInit(Seq.fill(DIM){ true.B })
+  accRAM.write.head.mask := VecInit(Seq.fill(SA_COLS){ true.B })
 }

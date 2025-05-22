@@ -50,13 +50,13 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     val sp_read = Valid(new SpRead)
     val acc_read = Valid(new AccRead())
     val cmp_ctrl = Valid(new CmpControl)
-    val pe_ctrl = Vec(DIM, Valid(new PECtrl))
+    val pe_ctrl = Vec(SA_ROWS, Valid(new PECtrl))
     val acc_ctrl = Valid(new AccumulatorControl)
     val sem_release = Valid(new Semaphore)
     val busy = Output(Bool())
   })
 
-  val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(DIM, impl).unzip
+  val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(SA_ROWS, SA_COLS, impl).unzip
 
   val rs1 = RegEnable(io.in.bits.spad, io.in.fire)
   // we need to modify the content in the queue, so can not use chisel.util.Queue
@@ -153,7 +153,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
 
 
   // Update flags / timers
-  val (computeDone, accumDone) = computeFlags.zip(accumFlags).zip(allPlans).map{ case ((cf, af), plan) =>
+  val (computeDone, accumStart, accumDone) = computeFlags.zip(accumFlags).zip(allPlans).map{ case ((cf, af), plan) =>
     val cDone = cf && plan.computeDone(computeTimer)
     val aDone = af && plan.accumDone(accumTimer)
     val aStart = cf && {
@@ -167,8 +167,8 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
       af := true.B
     }
     when(aDone) { af := false.B }
-    (cDone, aDone)
-  }.unzip
+    (cDone, aStart, aDone)
+  }.unzip3
 
   when(Cat(computeDone).orR) {
     computeTimer := 0.U
@@ -197,7 +197,7 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     }
     valid.write(1, Cat(set_cf).orR)
   }
-  val accReady = Cat(accumFlags) === 0.U ||
+  val accReady = (Cat(accumFlags) === 0.U && !Cat(accumStart).orR) ||
     Cat(accumDone).orR ||
     !io.in.bits.header.waitPrevAcc
 

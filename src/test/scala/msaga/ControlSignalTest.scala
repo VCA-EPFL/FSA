@@ -107,7 +107,7 @@ class ControlSignalTest extends AnyFlatSpec with PeekPokeAPI {
 
   it should "optimize execution for attention score with small dim" in {
     val dim = 3
-    val score = new AttentionScoreExecPlan(dim)
+    val score = new AttentionScoreExecPlan(dim, dim)
     for (gen <- score.pe_signals.filter(_.maxCycle > 0)) {
       test(dim, gen)
     }
@@ -115,7 +115,7 @@ class ControlSignalTest extends AnyFlatSpec with PeekPokeAPI {
 
   it should "optimize execution for attention score with medium dim" in {
     val dim = 8
-    val score = new AttentionScoreExecPlan(dim)
+    val score = new AttentionScoreExecPlan(dim, dim)
     for (gen <- score.pe_signals.filter(_.maxCycle > 0)) {
       test(dim, gen)
     }
@@ -123,7 +123,7 @@ class ControlSignalTest extends AnyFlatSpec with PeekPokeAPI {
 
   it should "optimize execution for attention score with large dim" in {
     val dim = 16
-    val score = new AttentionScoreExecPlan(dim)
+    val score = new AttentionScoreExecPlan(dim, dim)
     for (gen <- score.pe_signals.filter(_.maxCycle > 0)) {
       test(dim, gen)
     }
@@ -131,7 +131,7 @@ class ControlSignalTest extends AnyFlatSpec with PeekPokeAPI {
 
   it should "optimize execution for attention score with huge dim" in {
     val dim = 64
-    val score = new AttentionScoreExecPlan(dim)
+    val score = new AttentionScoreExecPlan(dim, dim)
     for (gen <- score.pe_signals.filter(_.maxCycle > 0)) {
       test(dim, gen)
     }

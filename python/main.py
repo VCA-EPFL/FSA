@@ -17,6 +17,7 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     seq_k, dk = K.shape
     dv, seq_v = V_t.shape
     assert d == dk and d == dv and seq_k == seq_v
+    assert bc == d, "MSAGA requires bc == d"
 
     O_t: MTile = M.alloc_mem((d, seq_q), M.fp32)
     Q_BLOCKS = Q.split(br, dim=-2) # [br, d]
@@ -99,17 +100,17 @@ def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarra
     return O_torch.numpy()
 
 
-def main(seq_q: int, seq_kv: int, d: int):
+def main(seq_q: int, seq_kv: int, d: int, br: int, bc: int):
     np.random.seed(0)
     Q_np = np.random.rand(seq_q, d).astype(np.float16)
     K_np = np.random.rand(seq_kv, d).astype(np.float16)
     V_np = np.random.rand(seq_kv, d).astype(np.float16)
-    O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, 4, 4)
+    O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, br, bc)
     O_torch = ref_torch(Q_np, K_np, V_np)
     Q = M.from_numpy(Q_np)
     K = M.from_numpy(K_np)
     V_t = M.from_numpy(V_np.T)
-    O_t = scaled_dot_product_attention(Q, K, V_t, 4, 4)
+    O_t = scaled_dot_product_attention(Q, K, V_t, br, bc)
     O = M.to_numpy(O_t).T
     M.compare_matrices(
         ref=('torch', O_torch),
@@ -120,4 +121,4 @@ def main(seq_q: int, seq_kv: int, d: int):
     )
 
 if __name__ == "__main__":
-    main(seq_q=4, seq_kv=4, d=4)
+    main(seq_q=4, seq_kv=4, d=4, br=4, bc=4)

@@ -168,7 +168,7 @@ class LoadStationary(val rows: Int, val cols: Int) extends ExecutionPlan {
   load_reg_li.parallel(1, cols)
 }
 
-class AttentionScoreExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan {
+class AttentionScoreExecPlan(val rows: Int, val cols: Int, ap: HasArithmeticParams) extends ExecutionPlan {
   /****** S = Q @ K ******/
   // read K from spad
   readScratchPad(0, rows, None)
@@ -211,28 +211,43 @@ class AttentionScoreExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan
   )
   // pass down delta_m; compute (s-m) * log2e in place
   flow_ud.flow_down(2 * rows + 3, 1)
-  update_reg.flow_down(2 * rows + 3, 1) // acc_ui is false, not need to control
+  update_reg.flow_down(2 * rows + 3, 1)
   flow_lr.flow_down(2 * rows + 3, 1)
+
+  val exp2_start = 2 * rows + 4
+  val exp2_cycles = ap.exp2PwlPieces
+  val exp2_end = exp2_start + exp2_cycles - 1
+
+  setComparator(exp2_start - 1, exp2_cycles, CmpControlCmd.PROP_EXP2_INTERCEPTS)
+  readScratchPad(
+    exp2_start - 1, exp2_cycles,
+    Some(ConstRead(SpadConstIdx.Exp2Slopes, revIn = false, revOut = false, delay = true))
+  )
   // use pow2 to generate exp
-  exp2.flow_down(2 * rows + 4, 1)
+  flow_ud.flow_down(exp2_start, exp2_cycles)
+  flow_lr.flow_down(exp2_start, exp2_cycles)
+  acc_ui.flow_down(exp2_start, exp2_cycles)
+  exp2.flow_down(exp2_start, exp2_cycles)
 
   // prepare input for next cycle
-  setComparator(2 * rows + 4, 1, CmpControlCmd.PROP_ZERO)
+  setComparator(exp2_end, 1, CmpControlCmd.PROP_ZERO)
   readScratchPad(
-    2 * rows + 4, 1,
+    exp2_end, 1,
     Some(ConstRead(SpadConstIdx.ONE, revIn = false, revOut = false, delay = true))
   )
   // use mac to compute the sum of exp
-  mac.flow_down(2 * rows + 5, 1)
-  acc_ui.flow_down(2 * rows + 5, 1)
-  flow_lr.flow_down(2 * rows + 5, 1)
+  mac.flow_down(exp2_end + 1, 1)
+  acc_ui.flow_down(exp2_end + 1, 1)
+  flow_lr.flow_down(exp2_end + 1, 1)
 
   // collect diff = row_max(i-1) - row_max(i), and compute exp(diff)
   setAccumulator(2 * rows + rows + cols + 2, 1, AccumulatorCmd.EXP_S1)
   setAccumulator(2 * rows + rows + cols + 3, 1, AccumulatorCmd.EXP_S2)
   // update exp sum
-  readAccRAM(2 * rows + rows + cols + 3, 1, None)
-  setAccumulator(2 * rows + rows + cols + 4, 1, AccumulatorCmd.ACC_SA)
+  // readAccRAM(2 * rows + rows + cols + 3, 1, None)
+  readAccRAM(exp2_end + rows + cols - 1, 1, None)
+  // setAccumulator(2 * rows + rows + cols + 4, 1, AccumulatorCmd.ACC_SA)
+  setAccumulator(exp2_end + rows + cols, 1, AccumulatorCmd.ACC_SA)
 }
 
 class AttentionValueExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan {

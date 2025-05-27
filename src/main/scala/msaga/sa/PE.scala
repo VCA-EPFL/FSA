@@ -50,12 +50,21 @@ class PE[E <: Data : Arithmetic, A <: Data : Arithmetic]
   val ctrl = io.in_ctrl.bits
   val fire = io.in_ctrl.fire
 
+  val exp2Done = RegInit(false.B)
+  when(fire) {
+    when(ctrl.exp2) {
+      exp2Done := exp2Done || macUnit.io.out_exp2
+    }.otherwise({
+      exp2Done := false.B
+    })
+  }
+
   when(fire) {
     when(ctrl.load_reg_li) {
       reg := io.l_input.bits
     }.elsewhen(ctrl.load_reg_ui) {
       reg := ev.viewAasE(io.u_input.bits)
-    }.elsewhen(ctrl.update_reg || ctrl.exp2) {
+    }.elsewhen(ctrl.update_reg || (macUnit.io.out_exp2 && !exp2Done)) {
       reg := macUnit.io.out_elemType
     }
   }

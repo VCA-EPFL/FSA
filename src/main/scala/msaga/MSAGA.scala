@@ -29,7 +29,7 @@ case class MSAGAParams(
   supportedExecutionPlans: (Int, Int, HasArithmeticParams) => Seq[(UInt, ExecutionPlan)] = {
     (rows, cols, ap) => Seq(
       ISA.MxFunc.LOAD_STATIONARY -> new LoadStationary(rows, cols),
-      ISA.MxFunc.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(rows, cols),
+      ISA.MxFunc.ATTENTION_SCORE_COMPUTE -> new AttentionScoreExecPlan(rows, cols, ap),
       ISA.MxFunc.ATTENTION_VALUE_COMPUTE -> new AttentionValueExecPlan(rows, cols),
       ISA.MxFunc.ATTENTION_LSE_NORM_SCALE -> new AttentionLseNormScale(rows, cols, ap),
       ISA.MxFunc.ATTENTION_LSE_NORM -> new AttentionLseNorm(rows, cols)
@@ -129,12 +129,24 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   accRAM.read.tail.zip(io.acc_read).foreach{ case (l, r) => l <> r }
 
 
-  val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(SA_ROWS))
+  val exp2PwlSlopes = VecInit(ev.exp2PwlSlopes)
+  val exp2PwlCounter = Counter(exp2PwlSlopes.length)
+  val exp2PwlSlopeVal = exp2PwlSlopes(exp2PwlCounter.value)
+
+  val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(SA_ROWS), exp2PwlSlopeVal)
   val spConstSel = RegEnable(
     mxControl.io.sp_read.bits.addr(SpadConstIdx.width - 1, 0),
     mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
   )
   val spConstVal = spConstList(spConstSel)
+
+  when(mxControl.io.sp_read.valid &&
+    mxControl.io.sp_read.bits.is_constant &&
+    spConstSel === SpadConstIdx.Exp2Slopes.U
+  ) {
+    exp2PwlCounter.inc()
+  }
+
   val accConstSel = RegEnable(
     mxControl.io.acc_read.bits.const_idx,
     mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.is_constant

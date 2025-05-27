@@ -10,9 +10,10 @@ import msaga.isa._
 import msaga.utils.{DelayedAssert, Ehr}
 
 object SpadConstIdx {
-  def width = 1
+  def width = 2
   def ONE = 0
   def AttentionScale = 1
+  def Exp2Slopes = 2
 }
 
 object AccConstIdx {

@@ -2,13 +2,6 @@ package msaga.arithmetic
 
 import chisel3._
 
-/* Type class for numeric data types, similar to UCB/GEMMINI https://github.com/ucb-bar/gemmini.
-   However, in our implementation the Arithmetic type class only requires `zero` and `min`,
-   other complex operations like mac and cmp are separated out to enable:
-   1. hardware resource sharing, e.g. the add/sub/mac/exp should share the same function unit.
-   2. decoupled type definition and function unit implementation
-*/
-
 trait Arithmetic[T] {
   implicit def cast(self: T): ArithmeticOps[T]
 }
@@ -22,15 +15,6 @@ trait ArithmeticOps[T] {
 }
 
 object Arithmetic {
-  implicit object SIntArithmetic extends Arithmetic[SInt] {
-    override implicit def cast(self: SInt): ArithmeticOps[SInt] = new ArithmeticOps[SInt] {
-      override def zero = 0.S(self.getWidth.W)
-      override def one = 1.S(self.getWidth.W)
-      override def minimum: SInt = (-(1 << (self.getWidth-1))).S(self.getWidth.W)
-      // FIXME: just for testing purpose only
-      override def attentionScale(dk: Int) = 1.S(self.getWidth.W)
-    }
-  }
   implicit object FPArithmetic extends Arithmetic[FloatPoint] {
     import easyfloat.{IEEEFloat, PyFPConst}
     override implicit def cast(self: FloatPoint): ArithmeticOps[FloatPoint] = new ArithmeticOps[FloatPoint] {
@@ -87,6 +71,7 @@ abstract class MacUnit[E <: Data : Arithmetic, A <: Data : Arithmetic](val elemT
     val in_cmd = Input(UInt(MacCMD.width.W))
     val out_accType = Output(accType)
     val out_elemType = Output(elemType)
+    val out_exp2 = Output(Bool())
   })
 }
 
@@ -108,6 +93,7 @@ trait HasMultiCycleIO { this: Module =>
 
 trait HasArithmeticParams {
   val reciprocalLatency: Int
+  val exp2PwlPieces: Int
 }
 
 abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic] extends HasArithmeticParams {
@@ -116,6 +102,8 @@ abstract class ArithmeticImpl[E <: Data : Arithmetic, A <: Data : Arithmetic] ex
   def peMac: MacUnit[E, A]
   def accUnit: MacUnit[A, A] with HasMultiCycleIO
   def accCmp: CmpUnit[A]
+  def exp2PwlIntercepts: Seq[A]
+  def exp2PwlSlopes: Seq[E]
   def viewAasE: A => E
   def viewEasA: E => A
   def cvtAtoE: A => E

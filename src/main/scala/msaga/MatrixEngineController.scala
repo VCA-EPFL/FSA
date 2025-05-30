@@ -8,6 +8,7 @@ import msaga.arithmetic._
 import msaga.frontend.Semaphore
 import msaga.isa._
 import msaga.utils.{DelayedAssert, Ehr}
+import chisel3.experimental.SourceInfo
 
 object SpadConstIdx {
   def width = 2
@@ -39,59 +40,46 @@ class AccRead()(implicit p: Parameters) extends MSAGABundle with CanReadConstant
   val rmw = Bool()
 }
 
-/*
-Pass `ArithmeticImpl` in because some execution plans may vary on it
-*/
-class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
-  impl: ArithmeticImpl[E, A]
-)(implicit p: Parameters) extends MSAGAModule {
 
-  val io = IO(new Bundle {
-    val in = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
-    val sp_read = Valid(new SpRead)
-    val acc_read = Valid(new AccRead())
-    val cmp_ctrl = Valid(new CmpControl)
-    val pe_ctrl = Vec(SA_ROWS, Valid(new PECtrl))
-    val acc_ctrl = Valid(new AccumulatorControl)
-    val sem_release = Valid(new Semaphore)
-    val busy = Output(Bool())
+class MatrixControllerIO(implicit p: Parameters) extends MSAGABundle {
+  val in = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
+  val sp_read = Valid(new SpRead)
+  val acc_read = Valid(new AccRead())
+  val cmp_ctrl = Valid(new CmpControl)
+  val pe_ctrl = Vec(SA_ROWS, Valid(new PECtrl))
+  val acc_ctrl = Valid(new AccumulatorControl)
+  val sem_release = Valid(new Semaphore)
+  val busy = Output(Bool())
+}
+
+class MatrixControlFSM
+(
+  planFunc: Seq[UInt],
+  executionPlans: Seq[ExecutionPlan]
+)(implicit p: Parameters) extends MSAGAModule {
+  val io = IO(new MatrixControllerIO() {
+    val conflictFree = Output(Bool())
   })
 
-  val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(SA_ROWS, SA_COLS, impl).unzip
-
+  val header = RegEnable(io.in.bits.header, io.in.fire)
   val rs1 = RegEnable(io.in.bits.spad, io.in.fire)
-  // we need to modify the content in the queue, so can not use chisel.util.Queue
-  val rs2_queue = Reg(Vec(2, new MatrixInstructionAcc(ACC_ROW_ADDR_WIDTH)))
-  val rs2_deq_ptr = RegInit(0.U(1.W))
-  val rs2_enq_ptr = RegInit(0.U(1.W))
-  val rs2 = rs2_queue(rs2_deq_ptr)
-  val semahpore_queue = Module(new Queue(new Semaphore, entries = 2, pipe = true))
+  val rs2 = RegEnable(io.in.bits.acc, io.in.fire)
 
-  val planSel = planFunc.map(func => func === io.in.bits.header.func)
-  val requireAccum = Mux1H(planSel, allPlans.map(_.accumulateMaxCycle > 0).map(_.B))
-  val hasDstSemaphore = Mux1H(planSel, allPlans.map(_.sem_write.cycle > 0).map(_.B))
-  when(io.in.fire && requireAccum) {
-    rs2_queue(rs2_enq_ptr) := io.in.bits.acc
-    rs2_enq_ptr := rs2_enq_ptr + 1.U
-  }
-  semahpore_queue.io.enq.valid := io.in.fire && hasDstSemaphore && io.in.bits.header.releaseValid
-  semahpore_queue.io.enq.bits.id := io.in.bits.header.semId
-  semahpore_queue.io.enq.bits.value := io.in.bits.header.releaseSemValue
-  DelayedAssert(semahpore_queue.io.enq.ready)
-  io.sem_release.valid := semahpore_queue.io.deq.fire
-  io.sem_release.bits := semahpore_queue.io.deq.bits
+  val conflictFreeFlag = Ehr(2, Bool(), Some(false.B))
+  val computeFlags = executionPlans.map(_ => RegInit(false.B))
+  val accumFlags = executionPlans.map(_ => RegInit(false.B))
 
-  // Make valid a EHR to allow back-to-back execution
-  val valid = Ehr(2, Bool(), Some(false.B))
-  val computeFlags = allPlans.map(_ => RegInit(false.B))
-  val accumFlags = allPlans.map(_ => RegInit(false.B))
-  val computeTimer = RegInit(0.U(allPlans.map(_.computeMaxCycle).max.U.getWidth.W))
-  val accumTimer = RegInit(0.U(allPlans.map(plan =>
+  val computeValid = Cat(computeFlags).orR
+  val accumValid = Cat(accumFlags).orR
+
+  val computeTimer = RegInit(0.U(executionPlans.map(_.computeMaxCycle).max.U.getWidth.W))
+  // use a separate timer for accumulation to reduce comparision latency
+  val accumTimer = RegInit(0.U(executionPlans.map(plan =>
     plan.accumulateMaxCycle - plan.accStartCycle
   ).max.U.getWidth.W))
 
   // PE Control
-  computeFlags.zip(allPlans).map{ case (flag, plan) =>
+  computeFlags.zip(executionPlans).map{ case (flag, plan) =>
     plan.genPECtrl(computeTimer, flag)
   }.transpose.map(row =>
     row.map(ctrl => ctrl.asUInt).reduce(_|_).asTypeOf(new PECtrl)
@@ -100,61 +88,57 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
     pe_ctrl.valid := generated.asUInt.orR
   }
 
+
+  def select[T <: Data]
+  (
+    timer: UInt,
+    flags: Seq[Bool], ctrlDesc: Seq[Iterable[CanGenerateHw[T] with HasEffRange]],
+    timerBaseOpt: Option[Seq[Int]] = None): Valid[T] =
+  {
+    val timerBase = timerBaseOpt.getOrElse(flags.map(_ => 0))
+    val (valid, ctrl) = flags.zip(ctrlDesc).zip(timerBase).flatMap { case ((flag, descSeq), tBase) =>
+      descSeq.map{ desc =>
+        (flag && desc.valid(timer, tBase)) -> desc.toHardware(rs1, rs2)
+      }
+    }.unzip
+    val out = Wire(Valid(chiselTypeOf(ctrl.head)))
+    out.valid := Cat(valid).orR
+    out.bits := Mux1H(valid, ctrl)
+    out
+  }
+
   // Scratchpad read
-  val (spReadValid, spReadCtrl) = computeFlags.zip(allPlans).flatMap { case (flag, plan) =>
-    plan.sp_read.map { desc =>
-      (flag && desc.valid(computeTimer)) -> desc.toHardware(rs1, rs2)
-    }
-  }.unzip
-  io.sp_read.valid := Cat(spReadValid).orR
-  io.sp_read.bits := Mux1H(spReadValid, spReadCtrl)
+  io.sp_read := select(computeTimer, computeFlags, executionPlans.map(_.sp_read))
   when(io.sp_read.fire) {
     // next row
     rs1.addr := (rs1.addr.zext + rs1.stride).asUInt
   }
 
   // Accum RAM read
-  val (accReadValid, accReadCtrl) = accumFlags.zip(allPlans).flatMap{ case (flag, plan) =>
-    plan.acc_read.map { desc =>
-      (flag && desc.valid(accumTimer, base = plan.accStartCycle)) -> desc.toHardware(rs1, rs2)
-    }
-  }.unzip
-  io.acc_read.valid := Cat(accReadValid).orR
-  io.acc_read.bits := Mux1H(accReadValid, accReadCtrl)
+  io.acc_read := select(accumTimer, accumFlags, executionPlans.map(_.acc_read), Some(executionPlans.map(_.accStartCycle)))
   when(io.acc_read.fire) {
     rs2.addr := (rs2.addr.zext + rs2.stride).asUInt
   }
 
   // CMP Control
-  val (cmpValid, cmpCtrl) = computeFlags.zip(allPlans).flatMap{ case (flag, plan) =>
-    plan.cmp_ctrl.map{ desc =>
-      (flag && desc.valid(computeTimer)) -> desc.toHardware(rs1, rs2)
-    }
-  }.unzip
-  io.cmp_ctrl.valid := Cat(cmpValid).orR
-  io.cmp_ctrl.bits := Mux1H(cmpValid, cmpCtrl)
+  io.cmp_ctrl := select(computeTimer, computeFlags, executionPlans.map(_.cmp_ctrl))
 
   // ACCUMULATOR Control
-  val (accValid, accCtrl) = accumFlags.zip(allPlans).flatMap{ case (flag, plan) =>
-    plan.acc_ctrl.map{ desc =>
-      (flag && desc.valid(accumTimer, base = plan.accStartCycle)) -> desc.toHardware(rs1, rs2)
-    }
-  }.unzip
-  io.acc_ctrl.valid := Cat(accValid).orR
-  io.acc_ctrl.bits := Mux1H(accValid, accCtrl)
+  io.acc_ctrl := select(accumTimer, accumFlags, executionPlans.map(_.acc_ctrl), Some(executionPlans.map(_.accStartCycle)))
 
   // Release Semaphore
-  semahpore_queue.io.deq.ready := Cat(computeFlags.zip(accumFlags).zip(allPlans).map{ case ((cf, af), plan) =>
-    if (plan.sem_write.useAccumTimer) {
+  io.sem_release.valid := Cat(computeFlags.zip(accumFlags).zip(executionPlans).map{ case ((cf, af), plan) =>
+    (plan.sem_write.cycle > 0).B && (if (plan.useAccTimer(plan.sem_write.cycle)) {
       af && plan.sem_write.valid(accumTimer, base = plan.accStartCycle)
     } else {
       cf && plan.sem_write.valid(computeTimer)
-    }
+    })
   }).orR
-
+  io.sem_release.bits.id := header.semId
+  io.sem_release.bits.value := header.releaseSemValue
 
   // Update flags / timers
-  val (computeDone, accumStart, accumDone) = computeFlags.zip(accumFlags).zip(allPlans).map{ case ((cf, af), plan) =>
+  val (computeDone, conflictFree, accumDone) = computeFlags.zip(accumFlags).zip(executionPlans).map{ case ((cf, af), plan) =>
     val cDone = cf && plan.computeDone(computeTimer)
     val aDone = af && plan.accumDone(accumTimer)
     val aStart = cf && {
@@ -168,25 +152,32 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
       af := true.B
     }
     when(aDone) { af := false.B }
-    (cDone, aStart, aDone)
+    val conflictFree = if (plan.useAccTimer(plan.conflict_free.cycle)) {
+      af && plan.conflict_free.valid(accumTimer, base = plan.accStartCycle)
+    } else {
+      cf && plan.conflict_free.valid(computeTimer)
+    }
+    (cDone, conflictFree, aDone)
   }.unzip3
 
   when(Cat(computeDone).orR) {
     computeTimer := 0.U
-    valid.write(0, false.B)
-  }.elsewhen(valid.io.read(0)){
+  }.elsewhen(Cat(computeFlags).orR){
     computeTimer := computeTimer + 1.U
   }
 
   when(Cat(accumDone).orR) {
     accumTimer := 0.U
-    rs2_deq_ptr := rs2_deq_ptr + 1.U
   }.elsewhen(Cat(accumFlags).orR) {
     accumTimer := accumTimer + 1.U
   }
 
+  when(Cat(conflictFree).orR) {
+    conflictFreeFlag.write(0, true.B)
+  }
+
   when(io.in.fire) {
-    val set_cf = computeFlags.zip(accumFlags).zip(allPlans).zip(planFunc).map{ case (((cf, af), plan), func) =>
+    val set_cf = computeFlags.zip(accumFlags).zip(executionPlans).zip(planFunc).map{ case (((cf, af), plan), func) =>
       val sel = func === io.in.bits.header.func
       if (plan.computeMaxCycle > 0) {
         cf := sel
@@ -194,19 +185,68 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
       if (plan.accumulateMaxCycle > 0 && plan.accStartCycle == 0) {
         af := sel
       }
-      (plan.computeMaxCycle > 0).B && sel
+      (plan.conflict_free.cycle == 0).B
     }
-    valid.write(1, Cat(set_cf).orR)
+    conflictFreeFlag.write(1, Cat(set_cf).orR)
   }
-  val accReady = (Cat(accumFlags) === 0.U && !Cat(accumStart).orR) ||
-    Cat(accumDone).orR ||
-    !io.in.bits.header.waitPrevAcc
 
-  io.in.ready := !valid.read(1) && accReady
-  io.busy := computeTimer > 0.U || accumTimer > 0.U || valid.read(1)
+  io.busy := computeValid || accumValid
+  io.in.ready := !io.busy
+  io.conflictFree := conflictFreeFlag.read(1)
 
-  when(RegNext(valid.read(0), false.B)) {
-    assert(RegNext(PopCount(computeFlags) <= 1.U))
+  DelayedAssert(PopCount(computeFlags) <= 1.U)
+  DelayedAssert(PopCount(accumFlags) <= 1.U)
+}
+
+/*
+Pass `ArithmeticImpl` in because some execution plans may vary on it
+*/
+class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
+  impl: ArithmeticImpl[E, A]
+)(implicit p: Parameters) extends MSAGAModule {
+  val io = IO(new MatrixControllerIO())
+
+  /*
+    we allow two instructions to be overlapped, they can control different
+    part of the systolic array simultaneously
+   */
+  val fsm_list = (0 until 2) map { _ =>
+    val (planFunc, allPlans) = msagaParams.supportedExecutionPlans(SA_ROWS, SA_COLS, impl).unzip
+    val fsm = Module(new MatrixControlFSM(planFunc, allPlans))
+    fsm
   }
-  assert(PopCount(accumFlags) <= 1.U)
+
+  def Mux1HValidIO[T <: Data](in: Seq[Valid[T]], out: Valid[T]): Unit = {
+    DelayedAssert(PopCount(in.map(_.valid)) <= 1.U)
+    out.valid := Cat(in.map(_.valid)).orR
+    out.bits := Mux1H(in.map(_.valid), in.map(_.bits))
+  }
+
+  val fsm_io = VecInit(fsm_list.map(_.io))
+  Mux1HValidIO(fsm_io.map(_.sp_read), io.sp_read)
+  Mux1HValidIO(fsm_io.map(_.acc_read), io.acc_read)
+  Mux1HValidIO(fsm_io.map(_.cmp_ctrl), io.cmp_ctrl)
+  Mux1HValidIO(fsm_io.map(_.acc_ctrl), io.acc_ctrl)
+  Mux1HValidIO(fsm_io.map(_.sem_release), io.sem_release)
+  io.pe_ctrl.zipWithIndex.foreach { case (out, idx) =>
+    Mux1HValidIO(fsm_io.map(_.pe_ctrl(idx)), out)
+  }
+
+  val enq_ptr = RegInit(0.U(1.W))
+  val deq_ptr = enq_ptr + 1.U
+  when(io.in.fire) {
+    enq_ptr := deq_ptr
+  }
+
+  val canEnq = Mux(io.in.bits.header.waitPrevAcc,
+    !io.busy,
+    !fsm_io(deq_ptr).busy || fsm_io(deq_ptr).conflictFree
+  )
+  io.in.ready := fsm_io(enq_ptr).in.ready && canEnq
+  fsm_io.map(_.in).zipWithIndex.foreach{ case (in, idx) =>
+    in.valid := io.in.valid && idx.U === enq_ptr && canEnq
+    in.bits := io.in.bits
+  }
+
+  io.busy := Cat(fsm_io.map(_.busy)).orR
 }

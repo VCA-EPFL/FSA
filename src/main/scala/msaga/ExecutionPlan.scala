@@ -97,19 +97,30 @@ trait ExecutionPlan {
     }
   }
 
-  case class SemaphoreWrite(cycle: Int) extends HasEffRange {
-    override val repeat: Int = 1
-    def useAccumTimer: Boolean = {
-      require(cycle < computeMaxCycle || cycle < accumulateMaxCycle)
-      accumulateMaxCycle > 0 && cycle >= accStartCycle
-    }
+  def useAccTimer(cycle: Int): Boolean = {
+    require(
+      cycle < computeMaxCycle || cycle < accumulateMaxCycle,
+      f"cycle $cycle must be less than computeMaxCycle $computeMaxCycle or accumulateMaxCycle $accumulateMaxCycle"
+    )
+    accumulateMaxCycle > 0 && cycle >= accStartCycle
   }
 
   val sp_read = ListBuffer[SpReadDesc]()
   val cmp_ctrl = ListBuffer[CmpCtrlDesc]()
   val acc_read = ListBuffer[AccReadDesc]()
   val acc_ctrl = ListBuffer[AccCtrlDesc]()
-  var sem_write: SemaphoreWrite = SemaphoreWrite(-1)
+
+  var semaphoreReleaseCycle: Option[Int] = None
+  var conflictFreeCycle: Option[Int] = None
+
+  lazy val sem_write: HasEffRange = new HasEffRange {
+    override val cycle: Int = semaphoreReleaseCycle.getOrElse(-1)
+    override val repeat: Int = 1
+  }
+  lazy val conflict_free: HasEffRange = new HasEffRange {
+    override val cycle: Int = conflictFreeCycle.get
+    override val repeat: Int = 1
+  }
 
   def readScratchPad(cycle: Int, repeat: Int, const: Option[ConstRead]) = {
     sp_read += SpReadDesc(cycle, repeat, const)
@@ -128,7 +139,13 @@ trait ExecutionPlan {
   }
 
   def releaseSemaphore(cycle: Int) = {
-    sem_write = SemaphoreWrite(cycle)
+    require(semaphoreReleaseCycle.isEmpty)
+    semaphoreReleaseCycle = Some(cycle)
+  }
+
+  def setConflictFree(cycle: Int) = {
+    require(conflictFreeCycle.isEmpty)
+    conflictFreeCycle = Some(cycle)
   }
 
   // exclusive
@@ -166,6 +183,12 @@ class LoadStationary(val rows: Int, val cols: Int) extends ExecutionPlan {
   releaseSemaphore(cols - 1)
   // load into systolic array
   load_reg_li.parallel(1, cols)
+  /*
+    Although we would occupy pe control signals until cycle `cols`,
+    the next instruction should always read sram first (with 1 cycle
+    latency), so we can start the next instruction at cycle `cols-1`
+   */
+  setConflictFree(cols - 1)
 }
 
 class AttentionScoreExecPlan(val rows: Int, val cols: Int, ap: HasArithmeticParams) extends ExecutionPlan {
@@ -240,6 +263,14 @@ class AttentionScoreExecPlan(val rows: Int, val cols: Int, ap: HasArithmeticPara
   acc_ui.flow_down(exp2_end + 1, 1)
   flow_lr.flow_down(exp2_end + 1, 1)
 
+  /*
+    The next instruction should always be `S @ V`,
+    start it at cycle exp2_end + 1 so that the sram read
+    of the next instruction can overlap with the last compute
+    of the current instruction
+  */
+  setConflictFree(exp2_end)
+
   // collect diff = row_max(i-1) - row_max(i), and compute exp(diff)
   setAccumulator(2 * rows + rows + cols + 2, 1, AccumulatorCmd.EXP_S1)
   setAccumulator(2 * rows + rows + cols + 3, 1, AccumulatorCmd.EXP_S2)
@@ -260,6 +291,15 @@ class AttentionValueExecPlan(val rows: Int, val cols: Int) extends ExecutionPlan
   mac.flow_down(1, rows)
   acc_ui.flow_down(1, rows)
   flow_lr.flow_down(1, rows)
+
+  /*
+    If the next instruction is load stationary (next inner loop start),
+    the last compute of the current instructions happens at cycle `2*rows - 1`,
+    we release at `2*rows - 2` to allow the sram read of the next instruction
+    overlap with current compute
+  */
+  setConflictFree(2 * rows - 1 - 1)
+
   // read old O out from accumulator sram
   readAccRAM(rows + cols - 1, rows, None)
   // accumulate, update O
@@ -277,6 +317,8 @@ class AttentionLseNormScale
   setAccumulator(1, 1, AccumulatorCmd.SET_SCALE)
   setAccumulator(2, ap.reciprocalLatency, AccumulatorCmd.RECIPROCAL)
   releaseSemaphore(2 + ap.reciprocalLatency - 1)
+  // This is a blocking instruction
+  setConflictFree(2 + ap.reciprocalLatency - 1)
 }
 
 // perform the final lse norm after each flash attention inner loop
@@ -285,4 +327,6 @@ class AttentionLseNorm(val rows: Int, val cols: Int) extends ExecutionPlan {
   readAccRAM(0, rows, None)
   setAccumulator(1, rows, AccumulatorCmd.ACC)
   releaseSemaphore(rows)
+  // This is a blocking instruction
+  setConflictFree(rows)
 }

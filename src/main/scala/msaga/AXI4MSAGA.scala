@@ -43,10 +43,22 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     val rawInstQueue = Module(
       new Queue(UInt(instBeatBits.W), msagaParams.instructionQueueEntries, useSyncReadMem = true)
     )
+
+    val perfCntExecTime = RegInit(0.U(32.W))
+    val perfCntMxWait = RegInit(0.U(32.W))
+    val perfCntMxBusy = RegInit(0.U(32.W))
+    val perfCntDMAWait = RegInit(0.U(32.W))
+    val perfCntDMABusy = RegInit(0.U(32.W))
+
     configNode.regmap(
       0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
       0x04 -> Seq(RegField.w(1, set_active)),
-      0x08 -> Seq(RegField.r(2, state))
+      0x08 -> Seq(RegField.r(2, state)),
+      0x0C -> Seq(RegField.r(32, perfCntExecTime)),
+      0x10 -> Seq(RegField.r(32, perfCntMxWait)),
+      0x14 -> Seq(RegField.r(32, perfCntMxBusy)),
+      0x18 -> Seq(RegField.r(32, perfCntDMAWait)),
+      0x1C -> Seq(RegField.r(32, perfCntDMABusy))
     )
 
     switch(state) {
@@ -56,12 +68,18 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
         }
       }
       is(s_active) {
+        perfCntExecTime := perfCntExecTime + 1.U
         when(set_done) {
           state := s_done
         }
       }
       is(s_done) {
         when(set_active) {
+          perfCntExecTime := 0.U
+          perfCntMxWait := 0.U
+          perfCntMxBusy := 0.U
+          perfCntDMAWait := 0.U
+          perfCntDMABusy := 0.U
           state := s_active
         }
       }
@@ -119,6 +137,27 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
 
     dmaSemAcquire <> dma.module.io.semaphoreAcquire
     dmaSemRelease <> dma.module.io.semaphoreRelease
+
+    when(state === s_active) {
+      when(mxInst.valid && !mxDepReady) {
+        perfCntMxWait := perfCntMxWait + 1.U
+      }
+      when(msaga.io.busy) {
+        perfCntMxBusy := perfCntMxBusy + 1.U
+      }
+      when(dmaInst.valid && !dma.module.io.busy) {
+        perfCntDMAWait := perfCntDMAWait + 1.U
+      }
+      when(dma.module.io.busy) {
+        perfCntDMABusy := perfCntDMABusy + 1.U
+      }
+    }
+
+    when(RegNext(set_done, false.B)) {
+      printf("MSAGA: exec time %d, mx wait %d, mx busy %d, dma wait %d, dma busy %d\n",
+        perfCntExecTime, perfCntMxWait, perfCntMxBusy, perfCntDMAWait, perfCntDMABusy
+      )
+    }
 
   }
 }

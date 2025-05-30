@@ -135,15 +135,17 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val spConstList = VecInit(ev.elemType.one, ev.elemType.attentionScale(SA_ROWS), exp2PwlSlopeVal)
   val spConstSel = RegEnable(
-    mxControl.io.sp_read.bits.addr(SpadConstIdx.width - 1, 0),
+    mxControl.io.sp_read.bits.addr.take(SpadConstIdx.width),
     mxControl.io.sp_read.valid && mxControl.io.sp_read.bits.is_constant
   )
   val spConstVal = spConstList(spConstSel)
 
-  when(mxControl.io.sp_read.valid &&
+  when(RegNext(
+    mxControl.io.sp_read.valid &&
     mxControl.io.sp_read.bits.is_constant &&
-    spConstSel === SpadConstIdx.Exp2Slopes.U
-  ) {
+    mxControl.io.sp_read.bits.addr.take(SpadConstIdx.width) === SpadConstIdx.Exp2Slopes.U,
+    false.B
+  )) {
     exp2PwlCounter.inc()
   }
 

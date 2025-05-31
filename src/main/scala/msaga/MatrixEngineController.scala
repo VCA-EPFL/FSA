@@ -129,9 +129,9 @@ class MatrixControlFSM
   // Release Semaphore
   io.sem_release.valid := Cat(computeFlags.zip(accumFlags).zip(executionPlans).map{ case ((cf, af), plan) =>
     (plan.sem_write.cycle > 0).B && (if (plan.useAccTimer(plan.sem_write.cycle)) {
-      af && plan.sem_write.valid(accumTimer, base = plan.accStartCycle)
+      af && plan.sem_write.valid(accumTimer, base = plan.accStartCycle) && header.releaseValid
     } else {
-      cf && plan.sem_write.valid(computeTimer)
+      cf && plan.sem_write.valid(computeTimer) && header.releaseValid
     })
   }).orR
   io.sem_release.bits.id := header.semId

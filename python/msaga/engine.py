@@ -18,6 +18,7 @@ class BaseEngine(ABC):
 class VerilatorSimulator(BaseEngine):
     def __init__(self, simulator_path: str,
                 output_dir: str = '/tmp', max_cycles: int = 10000000, verbose=True,
+                dram_sim: bool=False,
                 vcdfile: Optional[str]=None,
                 dram_sim_ini_dir: Optional[str]=None
                 ):
@@ -28,6 +29,7 @@ class VerilatorSimulator(BaseEngine):
         self.output_dir = output_dir
         self.max_cycles = max_cycles
         self.verbose = verbose
+        self.dram_sim = dram_sim
         self.vcdfile = vcdfile
         if dram_sim_ini_dir:
             self.dram_sim_ini_dir = dram_sim_ini_dir
@@ -62,14 +64,12 @@ class VerilatorSimulator(BaseEngine):
             f.write(bytes)
         mem_file = os.path.join(self.output_dir, 'mem.elf')
         self.dump_mem_elf(mem_file, input_tensors)
-        sim_cmd = [
-            self.simulator_path,
-            inst_file,
-            '+dramsim',
-            f'+dramsim_ini_dir={self.dram_sim_ini_dir}',
-            f'+loadmem={mem_file}',
-            f'+max-cycles={self.max_cycles}',
-        ]
+        sim_cmd = [self.simulator_path, inst_file]
+        if self.dram_sim:
+            sim_cmd.append('+dramsim')
+            sim_cmd.append(f'+dramsim_ini_dir={self.dram_sim_ini_dir}')
+        sim_cmd.append(f'+loadmem={mem_file}')
+        sim_cmd.append(f'+max-cycles={self.max_cycles}')
         if self.verbose:
             sim_cmd.append('+verbose')
         if self.vcdfile:
@@ -78,7 +78,7 @@ class VerilatorSimulator(BaseEngine):
         output_filenames: list[str] = []
         if isinstance(output_tensors, MTile):
             output_list = [output_tensors]
-        elif isinstance(output_tensors, list[MTile]):
+        elif isinstance(output_tensors, list):
             output_list = output_tensors
         else:
             output_list = []

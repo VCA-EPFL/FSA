@@ -8,7 +8,7 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.amba.axi4._
 import freechips.rocketchip.tilelink._
-import freechips.rocketchip.prci.SynchronousCrossing
+import freechips.rocketchip.prci.AsynchronousCrossing
 import chisel3._
 import msaga.arithmetic._
 
@@ -40,7 +40,7 @@ case class MSAGAInjector[E <: Data : Arithmetic, A <: Data : Arithmetic](arithme
         msaga.memNode
     }
     fbus.coupleTo("msaga") {
-      mbus.crossIn(tlConfigNode)(ValName("msaga_fbus_xing"))(SynchronousCrossing()) := _
+      mbus.crossIn(tlConfigNode)(ValName("msaga_fbus_xing"))(AsynchronousCrossing()) := _
     }
   }
 })
@@ -79,7 +79,7 @@ trait CanHaveMSAGADirectAXI4 { this: BaseSubsystem =>
       (msaga, tlConfigNode)
     }
     fbus.coupleTo("msaga") {
-      mbus.crossIn(tlConfigNode)(ValName("msaga_fbus_xing"))(SynchronousCrossing()) := _
+      mbus.crossIn(tlConfigNode)(ValName("msaga_fbus_xing"))(AsynchronousCrossing()) := _
     }
 
     val memPortParamsOpt = p(AXI4DirectMemPortKey)
@@ -108,7 +108,10 @@ trait CanHaveMSAGADirectAXI4 { this: BaseSubsystem =>
 
 object Configs {
   lazy val smallMSAGAParams = MSAGAParams(
-    dim = 4, spadRows = 256, accRows = 8
+    saRows = 4, saCols = 4, spadRows = 256, accRows = 32
+  )
+  lazy val largeMSAGAParams = MSAGAParams(
+   saRows = 128, saCols = 128, spadRows = 128 * 4 * 16, accRows = 128 * 2
   )
   lazy val fp16MulFp32AddArithmeticImpl = new FPArithmeticImpl(5, 10, 8, 23)
   lazy val bf16MulFp32AddArithmeticImpl = new FPArithmeticImpl(8, 7, 8, 23)

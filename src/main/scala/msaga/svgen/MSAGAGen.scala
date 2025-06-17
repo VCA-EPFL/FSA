@@ -17,7 +17,7 @@ object MSAGAGen {
       new MSAGA(new FPArithmeticImpl(
         genArgs.mulEW, genArgs.mulMW,
         genArgs.addEW, genArgs.addMW
-      )),
+      ), 8),
       genArgs.chiselArgs.toArray
     )
   }

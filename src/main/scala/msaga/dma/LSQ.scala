@@ -3,8 +3,8 @@ package msaga.dma
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.amba.axi4._
+import msaga.{SRAMNarrowRead, SRAMNarrowWrite}
 import msaga.frontend.Semaphore
-import msaga.{SRAMRead, SRAMWrite}
 import msaga.isa.ISA.Constants._
 import msaga.utils.DelayedAssert
 
@@ -52,11 +52,11 @@ abstract class BaseLoadStoreQueue(reqGen: DMARequest, n: Int) extends Module {
 }
 
 
-class StoreQueue[A <: Data]
+class StoreQueue
 (
   edge: AXI4EdgeParameters,
   reqGen: DMARequest, nInflight: Int,
-  accReadGen: SRAMRead[A]
+  accReadGen: SRAMNarrowRead
 ) extends BaseLoadStoreQueue(reqGen, nInflight) {
 
   val aw = IO(Decoupled(new AXI4BundleAW(edge.bundle)))
@@ -90,8 +90,7 @@ class StoreQueue[A <: Data]
   }
 
   val beatBits = edge.slave.beatBytes * 8
-  require(accRead.data.getWidth % beatBits == 0)
-  val nBeats = accRead.data.getWidth / beatBits
+  val nBeats = accRead.nSubBanks
 
   // sram read
   val rBeatCnt = RegInit(0.U(log2Up(nBeats).W))
@@ -105,8 +104,9 @@ class StoreQueue[A <: Data]
     writeQueue.io.enq.ready
   ) && (rEntry.rRepeat > rEntry.req.repeat)
   accRead.addr := rEntry.req.sramAddr
+  accRead.subBankIdx := rBeatCnt
   writeQueue.io.enq.valid := RegNext(accRead.fire, init = false.B)
-  writeQueue.io.enq.bits := accRead.data.asTypeOf(Vec(nBeats, UInt(beatBits.W)))(RegEnable(rBeatCnt, accRead.fire))
+  writeQueue.io.enq.bits := accRead.data.asUInt
   when(accRead.fire) {
     rBeatCnt := Mux(rLast, 0.U, rBeatCnt + 1.U)
     when(rLast) {
@@ -131,27 +131,18 @@ class StoreQueue[A <: Data]
     wBeatCnt := Mux(w.bits.last, 0.U, wBeatCnt + 1.U)
   }
 
-  // currently the request size must be equal to the size of accumulator row size
-  DelayedAssert(!io.req.fire || io.req.bits.size === (accRead.data.asUInt.getWidth / 8).U)
 }
 
 
 class LoadQueue[E <: Data]
 (
   edge: AXI4EdgeParameters, reqGen: DMARequest,
-  nInflight: Int, spadWriteGen: SRAMWrite[E]
+  nInflight: Int, spadWriteGen: SRAMNarrowWrite
 ) extends BaseLoadStoreQueue(reqGen, nInflight) {
 
   val ar = IO(Decoupled(new AXI4BundleAR(edge.bundle)))
   val r = IO(Flipped(Decoupled(new AXI4BundleR(edge.bundle))))
   val spadWrite = IO(spadWriteGen.cloneType)
-
-  val maxTransfer = edge.slave.maxTransfer
-  val maxBurstLen = maxTransfer / edge.slave.beatBytes
-  when(io.req.fire) {
-    assert(io.req.bits.size.take(log2Up(edge.slave.beatBytes)) === 0.U, "Currently size must be a multiple of the beat size")
-    assert(io.req.bits.size <= maxTransfer.U, "Each request must be able to fit in a single AXI4 burst transfer")
-  }
 
   val arPtr = Counter(nInflight)
   val rPtr = Counter(nInflight)
@@ -178,19 +169,12 @@ class LoadQueue[E <: Data]
   }
 
   // read data
-  val rBeatCnt = RegInit(0.U(log2Up(maxBurstLen).W))
-  val nLanes = spadWrite.data.getWidth / (edge.slave.beatBytes * 8)
-  require(spadWrite.data.getWidth % (edge.slave.beatBytes * 8) == 0)
-  val wData = VecInit(Seq.fill(nLanes){ r.bits.data }).asTypeOf(spadWrite.data)
-  val wMask = VecInit(
-    (0 until nLanes).map(i => i.U === rBeatCnt).flatMap(b =>
-      Seq.fill(spadWrite.mask.length / nLanes)(b)
-    )
-  )
+  val nBeats = spadWrite.nSubBanks
+  val rBeatCnt = RegInit(0.U(log2Up(nBeats).W))
   spadWrite.valid := r.valid
   spadWrite.addr := entries(rPtr.value).req.sramAddr
-  spadWrite.data := wData
-  spadWrite.mask := wMask
+  spadWrite.data := r.bits.data.asTypeOf(spadWrite.data)
+  spadWrite.subBankIdx := rBeatCnt
   r.ready := spadWrite.ready
 
   when(r.fire) {

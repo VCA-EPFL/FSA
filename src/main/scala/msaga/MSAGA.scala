@@ -74,7 +74,8 @@ class DebugSRAMIO(dim: Int) extends Bundle {
 
 class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
 (
-  arithmeticImpl: ArithmeticImpl[E, A]
+  arithmeticImpl: ArithmeticImpl[E, A],
+  beatBytes: Int
 )(implicit p: Parameters) extends MSAGAModule {
 
   implicit val ev: ArithmeticImpl[E, A] = arithmeticImpl
@@ -83,9 +84,13 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val inst = Flipped(Decoupled(new MatrixInstruction(SPAD_ROW_ADDR_WIDTH, ACC_ROW_ADDR_WIDTH)))
     val sem_release = Valid(new Semaphore)
     // dma write spad
-    val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMWrite(SPAD_ROW_ADDR_WIDTH, ev.elemType, SA_ROWS)))
+    val spad_write = Vec(msagaParams.nMemPorts, Flipped(new SRAMNarrowWrite(
+      SPAD_ROW_ADDR_WIDTH, ev.elemType.getWidth, SA_ROWS, beatBytes
+    )))
     // dma read accumulator
-    val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMRead(ACC_ROW_ADDR_WIDTH, ev.accType, SA_COLS)))
+    val acc_read = Vec(msagaParams.nMemPorts, Flipped(new SRAMNarrowRead(
+      ACC_ROW_ADDR_WIDTH, ev.accType.getWidth, SA_COLS, beatBytes
+    )))
     val busy = Output(Bool())
   })
 
@@ -95,22 +100,29 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   val sa = Module(new SystolicArray[E, A](SA_ROWS, SA_COLS))
   val accumulator = Module(new Accumulator[A](SA_ROWS, SA_COLS, ev.accType, ev.accUnit _))
 
-  val spRAM = Module(new BankedSRAM(
-    SPAD_ROWS, ev.elemType, SA_ROWS,
-    nBanks = msagaParams.spadBanks, nReadPorts = 1, nWritePorts = msagaParams.nMemPorts
-  )).io
+  val spRAM = {
+    val sram = Module(new BankedSRAM(
+      SPAD_ROWS, SA_ROWS, ev.elemType.getWidth,
+      msagaParams.spadBanks, beatBytes,
+      nFullRead = 1, nFullWrite = 0,
+      nNarrowRead = 0, nNarrowWrite = msagaParams.nMemPorts,
+      moduleName = "ScratchPadSRAM"
+    ))
+    sram.io
+  }
 
-  /*
-   * read port 0: matrix engine
-   * read port [1, 1 + nMemPorts): dma
-   * write port 0: matrix engine
-   */
-  val accRAM = Module(new BankedSRAM(
-    ACC_ROWS, ev.accType, SA_COLS,
-    nBanks = msagaParams.accBanks, nReadPorts = 1 + msagaParams.nMemPorts, nWritePorts = 1
-  )).io
+  val accRAM = {
+    val sram = Module(new BankedSRAM(
+      ACC_ROWS, SA_COLS, ev.accType.getWidth,
+      msagaParams.accBanks, beatBytes,
+      nFullRead = 1, nFullWrite = 1,
+      nNarrowRead = msagaParams.nMemPorts, nNarrowWrite = 0,
+      moduleName = "AccumulationSRAM"
+    ))
+    sram.io
+  }
 
-  Seq(spRAM.read.head, spRAM.write.head, accRAM.read.head, accRAM.write.head).foreach { x =>
+  Seq(spRAM.fullRead.head, spRAM.narrowWrite.head, accRAM.fullRead.head, accRAM.fullWrite.head).foreach { x =>
     DelayedAssert(!x.valid || x.ready)
   }
 
@@ -118,15 +130,17 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   io.sem_release := mxControl.io.sem_release
   io.busy := mxControl.io.busy
 
-  spRAM.write.zip(io.spad_write).foreach{ case (l, r) => l <> r }
+  spRAM.narrowWrite.zip(io.spad_write).foreach{ case (l, r) => l <> r }
 
-  spRAM.read.head.valid := mxControl.io.sp_read.valid && !mxControl.io.sp_read.bits.is_constant
-  spRAM.read.head.addr := mxControl.io.sp_read.bits.addr
+  spRAM.fullRead.head.valid := mxControl.io.sp_read.valid && !mxControl.io.sp_read.bits.is_constant
+  spRAM.fullRead.head.addr := mxControl.io.sp_read.bits.addr
+  spRAM.fullRead.head.setFullMask()
 
-  accRAM.read.head.valid := mxControl.io.acc_read.valid && !mxControl.io.acc_read.bits.is_constant
-  accRAM.read.head.addr := mxControl.io.acc_read.bits.addr
+  accRAM.fullRead.head.valid := mxControl.io.acc_read.valid && !mxControl.io.acc_read.bits.is_constant
+  accRAM.fullRead.head.addr := mxControl.io.acc_read.bits.addr
+  accRAM.fullRead.head.setFullMask()
 
-  accRAM.read.tail.zip(io.acc_read).foreach{ case (l, r) => l <> r }
+  accRAM.narrowRead.zip(io.acc_read).foreach{ case (l, r) => l <> r }
 
 
   val exp2PwlSlopes = VecInit(ev.exp2PwlSlopes)
@@ -159,7 +173,7 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   inputDelayer.io.in.valid := RegNext(mxControl.io.sp_read.valid, false.B)
   inputDelayer.io.in.bits.data := Mux(RegNext(mxControl.io.sp_read.bits.is_constant),
     VecInit(Seq.fill(SA_ROWS)(spConstVal)),
-    spRAM.read.head.data
+    spRAM.fullRead.head.data.asTypeOf(inputDelayer.io.in.bits.data)
   )
   inputDelayer.io.in.bits.rev_input := RegNext(mxControl.io.sp_read.bits.rev_sram_out)
   inputDelayer.io.in.bits.delay_output := RegNext(mxControl.io.sp_read.bits.delay_sram_out)
@@ -174,12 +188,12 @@ class MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic]
   accumulator.io.sa_in := outputDelayer.io.out
   accumulator.io.sram_in := Mux(RegNext(mxControl.io.acc_read.bits.is_constant),
     VecInit(Seq.fill(SA_COLS)(accConstVal)),
-    accRAM.read.head.data
+    accRAM.fullRead.head.data.asTypeOf(accumulator.io.sram_in)
   )
   accumulator.io.ctrl_in := mxControl.io.acc_ctrl
 
-  accRAM.write.head.valid := RegNext(mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.rmw, false.B)
-  accRAM.write.head.addr := RegNext(mxControl.io.acc_read.bits.addr)
-  accRAM.write.head.data := accumulator.io.sram_out
-  accRAM.write.head.mask := VecInit(Seq.fill(SA_COLS){ true.B })
+  accRAM.fullWrite.head.valid := RegNext(mxControl.io.acc_read.valid && mxControl.io.acc_read.bits.rmw, false.B)
+  accRAM.fullWrite.head.addr := RegNext(mxControl.io.acc_read.bits.addr)
+  accRAM.fullWrite.head.data := accumulator.io.sram_out.asTypeOf(accRAM.fullWrite.head.data)
+  accRAM.fullWrite.head.setFullMask()
 }

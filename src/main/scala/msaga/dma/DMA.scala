@@ -7,25 +7,27 @@ import org.chipsalliance.cde.config._
 import chisel3._
 import chisel3.util._
 import msaga.frontend.Semaphore
-import msaga.{SRAMRead, SRAMWrite}
+import msaga.{SRAMNarrowRead, SRAMNarrowWrite}
 import msaga.isa.DMAInstruction
 import msaga.isa.ISA.DMAFunc
 import msaga.utils.{DelayedAssert, Ehr}
 
 
-class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(outer) {
+class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
   val node = outer.node
   val nPorts = node.out.size
   val memAddrWidth = node.out.map(_._2.bundle.addrBits).max
   val sramAddrWidth = outer.sramAddrWidth
   val (dmaLoadInflight, dmaStoreInflight) = (outer.dmaLoadInflight, outer.dmaStoreInflight)
 
+  val beatBytes = node.out.head._2.slave.beatBytes
+
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
     val semaphoreAcquire = Decoupled(new Semaphore)
     val semaphoreRelease = Valid(new Semaphore)
-    val spadWrite = Vec(nPorts, new SRAMWrite(sramAddrWidth, outer.spadElem, outer.spadCols))
-    val accRead = Vec(nPorts, new SRAMRead(sramAddrWidth, outer.accElem, outer.accCols))
+    val spadWrite = Vec(nPorts, new SRAMNarrowWrite(sramAddrWidth, outer.spadElemWidth, outer.spadRowSize, beatBytes))
+    val accRead = Vec(nPorts, new SRAMNarrowRead(sramAddrWidth, outer.accElemWidth, outer.accRowSize, beatBytes))
     val busy = Output(Bool())
   })
 
@@ -124,16 +126,16 @@ class DMAImpl[E <: Data, A <: Data](outer: DMA[E, A]) extends LazyModuleImp(oute
 
 }
 
-class DMA[E <: Data, A <: Data]
+class DMA
 (
   val nPorts: Int,
   val sramAddrWidth: Int,
   val dmaLoadInflight: Int,
   val dmaStoreInflight: Int,
-  val spadElem: E,
-  val spadCols: Int,
-  val accElem: A,
-  val accCols: Int
+  val spadElemWidth: Int,
+  val spadRowSize: Int,
+  val accElemWidth: Int,
+  val accRowSize: Int
 )(implicit p: Parameters) extends LazyModule {
 
   require(isPow2(nPorts))

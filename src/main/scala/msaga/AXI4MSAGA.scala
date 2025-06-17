@@ -25,10 +25,10 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     sramAddrWidth = msagaParams.sramAddrWidth,
     dmaLoadInflight = msagaParams.dmaLoadInflight,
     dmaStoreInflight = msagaParams.dmaStoreInflight,
-    spadElem = ev.elemType,
-    spadCols = msagaParams.saRows,
-    accElem = ev.accType,
-    accCols = msagaParams.saCols
+    spadElemWidth = ev.elemType.getWidth,
+    spadRowSize = msagaParams.saRows,
+    accElemWidth = ev.accType.getWidth,
+    accRowSize = msagaParams.saCols
   ))
   val memNode = dma.node
 
@@ -94,7 +94,8 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
 
     val decoder = Module(new Decoder(memAddrWidth))
     val semaphores = Module(new Semaphores(nRead = 2, nWrite = 2))
-    val msaga = Module(new MSAGA(ev))
+    val dmaBeatBytes = memNode.out.head._2.slave.beatBytes
+    val msaga = Module(new MSAGA(ev, dmaBeatBytes))
 
     val is_active = state === s_active
     decoder.io.in.valid := rawInstQueue.io.deq.valid && is_active

@@ -34,9 +34,9 @@ msaga_tsi_t::msaga_tsi_t(int argc, char** argv) : tsi_t(argc, argv),
                 mem_dump_start_addr = std::stoul(start_str, nullptr, 16);
                 mem_dump_size = std::stoul(size_str, nullptr, 16);
 
-                std::cout << "[MSAGA] Filename: " << mem_dump_filename << "\n";
-                std::cout << "[MSAGA] Start Address: 0x" << std::hex << mem_dump_start_addr << "\n";
-                std::cout << "[MSAGA] Size: 0x" << std::hex << mem_dump_size << "\n";
+                // std::cout << "[MSAGA] Filename: " << mem_dump_filename << "\n";
+                // std::cout << "[MSAGA] Start Address: 0x" << std::hex << mem_dump_start_addr << "\n";
+                // std::cout << "[MSAGA] Size: 0x" << std::hex << mem_dump_size << "\n";
             } else {
                 std::cerr << "[MSAGA] Error parsing +dump-mem argument: " << value << "\n";
             }
@@ -60,8 +60,8 @@ void msaga_tsi_t::dump_memory() {
 }
 
 void msaga_tsi_t::run() {
-    load_instructions(target_args()[0]);
     reset();
+    load_instructions(target_args()[0]);
     while(!should_exit()) {
         int state = msaga_tsi_t::STATE_IDLE;
         while (state != msaga_tsi_t::STATE_DONE) {

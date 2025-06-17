@@ -49,6 +49,8 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     val perfCntMxBusy = RegInit(0.U(32.W))
     val perfCntDMAWait = RegInit(0.U(32.W))
     val perfCntDMABusy = RegInit(0.U(32.W))
+    val perfCntInstWait = RegInit(0.U(32.W))
+    val perfCntInstBusy = RegInit(0.U(32.W))
 
     configNode.regmap(
       0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
@@ -58,7 +60,9 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       0x10 -> Seq(RegField.r(32, perfCntMxWait)),
       0x14 -> Seq(RegField.r(32, perfCntMxBusy)),
       0x18 -> Seq(RegField.r(32, perfCntDMAWait)),
-      0x1C -> Seq(RegField.r(32, perfCntDMABusy))
+      0x1C -> Seq(RegField.r(32, perfCntDMABusy)),
+      0x20 -> Seq(RegField.r(32, perfCntInstWait)),
+      0x24 -> Seq(RegField.r(32, perfCntInstBusy))
     )
 
     switch(state) {
@@ -80,6 +84,8 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
           perfCntMxBusy := 0.U
           perfCntDMAWait := 0.U
           perfCntDMABusy := 0.U
+          perfCntInstWait := 0.U
+          perfCntInstBusy := 0.U
           state := s_active
         }
       }
@@ -151,11 +157,20 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       when(dma.module.io.busy) {
         perfCntDMABusy := perfCntDMABusy + 1.U
       }
+      when(rawInstQueue.io.deq.valid && !rawInstQueue.io.deq.ready) {
+        perfCntInstBusy := perfCntInstBusy + 1.U
+      }
+      when(!rawInstQueue.io.deq.valid && rawInstQueue.io.deq.ready) {
+        perfCntInstWait := perfCntInstWait + 1.U
+      }
     }
 
     when(RegNext(set_done, false.B)) {
-      printf("MSAGA: exec time %d, mx wait %d, mx busy %d, dma wait %d, dma busy %d\n",
-        perfCntExecTime, perfCntMxWait, perfCntMxBusy, perfCntDMAWait, perfCntDMABusy
+      printf("MSAGA: exec time %d, mx wait %d, mx busy %d, dma wait %d, dma busy %d, inst wait %d, inst busy %d\n",
+        perfCntExecTime,
+        perfCntMxWait, perfCntMxBusy,
+        perfCntDMAWait, perfCntDMABusy,
+        perfCntInstWait, perfCntInstBusy
       )
     }
 

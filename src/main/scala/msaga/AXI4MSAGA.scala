@@ -44,6 +44,13 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       new Queue(UInt(instBeatBits.W), msagaParams.instructionQueueEntries, useSyncReadMem = true)
     )
 
+    val firstInstFire = RegInit(false.B)
+    when(msaga.io.inst.fire) {
+      firstInstFire := true.B
+    }.elsewhen(set_done) {
+      firstInstFire := false.B
+    }
+
     val perfCntExecTime = RegInit(0.U(32.W))
     val perfCntMxWait = RegInit(0.U(32.W))
     val perfCntMxBusy = RegInit(0.U(32.W))
@@ -72,7 +79,9 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
         }
       }
       is(s_active) {
-        perfCntExecTime := perfCntExecTime + 1.U
+        when(firstInstFire) {
+          perfCntExecTime := perfCntExecTime + 1.U
+        }
         when(set_done) {
           state := s_done
         }
@@ -161,7 +170,7 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       when(rawInstQueue.io.deq.valid && !rawInstQueue.io.deq.ready) {
         perfCntInstBusy := perfCntInstBusy + 1.U
       }
-      when(!rawInstQueue.io.deq.valid && rawInstQueue.io.deq.ready) {
+      when(!rawInstQueue.io.deq.valid && rawInstQueue.io.deq.ready && firstInstFire) {
         perfCntInstWait := perfCntInstWait + 1.U
       }
     }

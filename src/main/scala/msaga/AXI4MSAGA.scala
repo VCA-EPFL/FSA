@@ -45,11 +45,6 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     )
 
     val firstInstFire = RegInit(false.B)
-    when(msaga.io.inst.fire) {
-      firstInstFire := true.B
-    }.elsewhen(set_done) {
-      firstInstFire := false.B
-    }
 
     val perfCntExecTime = RegInit(0.U(32.W))
     val perfCntMxWait = RegInit(0.U(32.W))
@@ -105,6 +100,12 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     val semaphores = Module(new Semaphores(nRead = 2, nWrite = 2))
     val dmaBeatBytes = memNode.out.head._2.slave.beatBytes
     val msaga = Module(new MSAGA(ev, dmaBeatBytes))
+
+    when(msaga.io.inst.fire) {
+      firstInstFire := true.B
+    }.elsewhen(set_done) {
+      firstInstFire := false.B
+    }
 
     val is_active = state === s_active
     decoder.io.in.valid := rawInstQueue.io.deq.valid && is_active

@@ -201,9 +201,9 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     |"mem_size": ${memParams.master.size},
     |"mem_align": ${memParams.master.beatBytes},
     |"spad_base": 0,
-    |"spad_size": ${msagaParams.spadRows * ev.elemType.getWidth / 8},
+    |"spad_size": ${msagaParams.spadRows * msagaParams.saRows * ev.elemType.getWidth / 8},
     |"acc_base": 0,
-    |"acc_size": ${msagaParams.accRows * ev.accType.getWidth / 8}
+    |"acc_size": ${msagaParams.accRows * msagaParams.saCols * ev.accType.getWidth / 8}
     |}
     """.stripMargin
 

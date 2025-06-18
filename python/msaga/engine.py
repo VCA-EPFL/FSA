@@ -7,7 +7,7 @@ from typing import Optional
 from .kernel import Kernel
 from .tensor import MTile
 from .utils import ElfWriter
-from .config import g_config
+from .config import get_config
 from .dtype import to_numpy_dtype
 
 class BaseEngine(ABC):
@@ -52,7 +52,7 @@ class VerilatorSimulator(BaseEngine):
             (x.data_ptr, x.size, x.data)
             for x in tensors if x.data is not None
         ]
-        writer = ElfWriter(segments, g_config.mem_align)
+        writer = ElfWriter(segments, get_config().mem_align)
         writer.write_elf(filename)
 
     def execute(self, kernel: Kernel) -> None | MTile | list[MTile]:

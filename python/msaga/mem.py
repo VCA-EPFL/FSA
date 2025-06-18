@@ -1,6 +1,5 @@
 from .tensor import STile, ATile, MTile, T
 from .dtype import *
-from .config import g_config
 from typing import Type
 
 class MemoryAllocator:
@@ -38,7 +37,7 @@ class MemoryAllocator:
                 # print(f"Allocated {size} bytes at address {hex(allocated_addr)}")
                 return allocated_addr
 
-        raise RuntimeError("Allocation failed: not enough memory.")
+        raise RuntimeError(f"Allocation failed: not enough memory. Requested {size} bytes, but only {self.size - sum(self.allocated_blocks.values())} bytes available.")
 
     def deallocate(self, addr: int):
         """ Deallocates a previously allocated block of memory. """
@@ -121,20 +120,3 @@ class CompoundMemoryManger:
             return size
         else:
             raise TypeError(f"Shape must be an int or tuple of ints, got {type(shape)}")
-
-
-g_mem_manger = CompoundMemoryManger(
-    mem_base=g_config.mem_base,
-    mem_size=g_config.mem_size,
-    mem_align=g_config.mem_align,
-
-    spad_base=g_config.spad_base,
-    spad_size=g_config.spad_size,
-    spad_align=g_config.sa_cols * g_config.e_type.itemsize,
-    spad_dtype=g_config.e_type,
-
-    acc_base=g_config.acc_base,
-    acc_size=g_config.acc_size,
-    acc_align=g_config.sa_cols * g_config.a_type.itemsize,
-    acc_dtype=g_config.a_type
-)

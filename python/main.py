@@ -183,7 +183,8 @@ if __name__ == "__main__":
         print(f"Warning: Config file not found: {config_file}. Using default MSAGA config.")
     else:
         print(f"Loading config from: {config_file}")
-        cfg = M.load_config(config_file)
+        M.init(config_file)
+        cfg = M.get_config()
 
     main(
         args.seq_q, args.seq_kv,

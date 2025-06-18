@@ -1,8 +1,7 @@
 from typing import Optional
 from .instructions import *
 from .tensor import MTile, STile, ATile
-from .config import g_config
-from .mem import g_mem_manger
+from .config import get_config, get_mem_manager
 
 @dataclass
 class Kernel:
@@ -12,16 +11,16 @@ class Kernel:
 
 class KernelContext:
     def __init__(self):
-        self.rows = g_config.sa_rows
-        self.cols = g_config.sa_cols
+        self.rows = get_config().sa_rows
+        self.cols = get_config().sa_cols
         self.instructions: list[Instruction] = []
 
     def tile_row_addr(self, tile: ATile | STile) -> int:
         # on-chip SRAMs are not byte-addressed, they are row-addressed
         if isinstance(tile, STile):
-            assert tile.shape[-1] == self.rows
+            assert tile.shape[-1] == self.rows, f"Expected tile with {self.rows} rows, got {tile.shape[-1]} rows"
         else:
-            assert tile.shape[-1] == self.cols
+            assert tile.shape[-1] == self.cols, f"Expected tile with {self.cols} cols, got {tile.shape[-1]} cols"
         cols, itemsize = tile.shape[-1], tile.dtype.itemsize
         return tile.data_ptr // (cols * itemsize)
 
@@ -47,7 +46,7 @@ def kernel(func):
             "the return type of MSAGA kernel function can only be one of MTile, list[MTile] or None"
         kernel = Kernel(
             __g_kernel_ctx.instructions,
-            g_mem_manger.mem_tensor_list,
+            get_mem_manager().mem_tensor_list,
             ret
         )
         __g_kernel_ctx = None

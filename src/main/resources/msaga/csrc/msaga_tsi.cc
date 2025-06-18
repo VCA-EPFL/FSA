@@ -3,60 +3,35 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sstream>
+#include <fstream>
 #include <iostream>
 #include "msaga_tsi.h"
+
+namespace msaga
+{
+    std::vector<MemDump> mem_dumps;
+}
 
 void msaga_tsi_t::msaga_host_thread(void *arg) {
     msaga_tsi_t *tsi = static_cast<msaga_tsi_t*>(arg);
     tsi->run();
 }
 
-msaga_tsi_t::msaga_tsi_t(int argc, char** argv) : tsi_t(argc, argv),
-    mem_dump_filename(""),
-    mem_dump_start_addr(0),
-    mem_dump_size(0)
+msaga_tsi_t::msaga_tsi_t(int argc, char** argv) : tsi_t(argc, argv)
 {
     msaga_host.init(msaga_host_thread, this);
-    std::vector<std::string> args(argv + 1, argv + argc);
-    for (auto& arg : args) {
-        if (arg.find("+dump-mem=") == 0) {
-            std::string value = arg.substr(std::string("+dump-mem=").size());
-
-            std::stringstream ss(value);
-            std::string start_str, size_str;
-
-            // Split the string using ':' as delimiter
-            if (std::getline(ss, mem_dump_filename, ':') &&
-                std::getline(ss, start_str, ':') &&
-                std::getline(ss, size_str, ':')) {
-
-                // Convert address and size from hex string to integers
-                mem_dump_start_addr = std::stoul(start_str, nullptr, 16);
-                mem_dump_size = std::stoul(size_str, nullptr, 16);
-
-                // std::cout << "[MSAGA] Filename: " << mem_dump_filename << "\n";
-                // std::cout << "[MSAGA] Start Address: 0x" << std::hex << mem_dump_start_addr << "\n";
-                // std::cout << "[MSAGA] Size: 0x" << std::hex << mem_dump_size << "\n";
-            } else {
-                std::cerr << "[MSAGA] Error parsing +dump-mem argument: " << value << "\n";
-            }
-        }
-    }
 }
 
 void msaga_tsi_t::dump_memory() {
-    int fd = open(mem_dump_filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    if (fd == -1) {
-        throw std::runtime_error("could not open " + mem_dump_filename);
+    for (auto & mem_dump : msaga::mem_dumps) {
+        std::cout << "[MSAGA] Dumping memory to " << mem_dump.filename << "\n";
+        std::ofstream ofs(mem_dump.filename, std::ios::binary);
+        if (!ofs) {
+            throw std::runtime_error("could not open " + mem_dump.filename);
+        }
+        ofs.write(reinterpret_cast<const char*>(mem_dump.data.data()), mem_dump.data.size());
+        // std::cout << "[MSAGA] Memory dump completed: " << mem_dump.filename << "\n";
     }
-    for (uint32_t addr = mem_dump_start_addr; addr < mem_dump_start_addr + mem_dump_size; addr += sizeof(uint32_t)) {
-        uint32_t data;
-        read_chunk(addr, sizeof(uint32_t), &data);
-        // std::cout << "[MSAGA] Dumping memory at address 0x" << std::hex << addr << ": 0x" << data << "\n";
-        write(fd, &data, sizeof(uint32_t));
-    }
-    close(fd);
-    std::cout << "[MSAGA] Memory dump saved to " << mem_dump_filename << "\n";
 }
 
 void msaga_tsi_t::run() {
@@ -67,9 +42,7 @@ void msaga_tsi_t::run() {
         while (state != msaga_tsi_t::STATE_DONE) {
             read_chunk(0x8008, sizeof(int), &state);
         }
-        if (!mem_dump_filename.empty()) {
-            dump_memory();
-        }
+        dump_memory();
         htif_exit(0);
     }
     stop();

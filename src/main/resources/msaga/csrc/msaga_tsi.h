@@ -7,6 +7,18 @@
 #include <fesvr/htif.h>
 #include <fesvr/context.h>
 
+namespace msaga {
+  struct MemDump
+  {
+      uint64_t start_addr;
+      uint64_t size;
+      std::string filename;
+      std::vector<uint8_t> data;
+  };
+}
+
+
+
 class msaga_tsi_t : public tsi_t
 {
  public:
@@ -28,9 +40,6 @@ class msaga_tsi_t : public tsi_t
 
  private:
   context_t msaga_host;
-  std::string mem_dump_filename;
-  uint32_t mem_dump_start_addr;
-  uint32_t mem_dump_size;
 
   static void msaga_host_thread(void *tsi);
   void dump_memory();

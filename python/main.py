@@ -2,15 +2,11 @@ import os
 import torch
 import numpy as np
 import msaga as M
+import argparse
 from unit_test.data import *
 from msaga.tensor import MTile, ATile, STile
 
-simulator = M.VerilatorSimulator(
-    os.path.join('..', '..', '..', 'sims', 'verilator', 'simulator-chipyard.harness-MSAGAConfig-debug'),
-    vcdfile=os.path.join('..', '..', '..', 'sims', 'verilator', 'sim.vcd'),
-)
-
-@M.kernel(engine=simulator)
+@M.kernel
 def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: int) -> MTile:
     assert (len(Q.shape), len(K.shape), len(V_t.shape)) == (2, 2, 2)
     seq_q, d = Q.shape
@@ -65,7 +61,7 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     M.fence(mx=True, dma=True, stop=True)
     return O_t
 
-def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int) -> np.ndarray:
+def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int, verbose: bool) -> np.ndarray:
     row_blocks = Q_np.shape[0] // br
     col_blocks = K_np.shape[0] // bc
     d = Q_np.shape[-1]
@@ -86,6 +82,8 @@ def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: in
                 acc_ew=8, acc_mw=23,
                 backend=backend
             )
+            if verbose:
+                print(str(tile))
             PrevRowMax = tile.AccRowMaxS
             PrevRowSum = tile.AccRowSum
             PrevO = tile.AccO
@@ -100,25 +98,95 @@ def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarra
     return O_torch.numpy()
 
 
-def main(seq_q: int, seq_kv: int, d: int, br: int, bc: int):
+def main(
+        seq_q: int, seq_kv: int, d: int, br: int, bc: int,
+        engine: M.engine.BaseEngine,
+        diff_easyfloat: bool = False,
+        easyfloat_verbose: bool = False
+    ):
     np.random.seed(0)
     Q_np = np.random.rand(seq_q, d).astype(np.float16)
     K_np = np.random.rand(seq_kv, d).astype(np.float16)
     V_np = np.random.rand(seq_kv, d).astype(np.float16)
-    O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, br, bc)
-    O_torch = ref_torch(Q_np, K_np, V_np)
     Q = M.from_numpy(Q_np)
     K = M.from_numpy(K_np)
     V_t = M.from_numpy(V_np.T)
-    O_t = scaled_dot_product_attention(Q, K, V_t, br, bc)
+    O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc))
     O = M.to_numpy(O_t).T
+    impls = {
+        'MSAGA': O,
+    }
+
+    if diff_easyfloat:
+        print("Comparing with PyEasyFloat...")
+        if easyfloat_verbose:
+            print("PyEasyFloat verbose mode enabled.")
+        O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, br, bc, easyfloat_verbose)
+        impls['PyEasyFloat'] = O_pyeasyfloat
+
+    print("Comparing with Torch...")
+    O_torch = ref_torch(Q_np, K_np, V_np)
+
     M.compare_matrices(
-        ref=('torch', O_torch),
-        impls={
-            'MSAGA': O,
-            'PyEasyFloat': O_pyeasyfloat
-        }
+        ('torch', O_torch),
+        impls
     )
 
 if __name__ == "__main__":
-    main(seq_q=4, seq_kv=4, d=4, br=4, bc=4)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seq_q', type=int, default=4, help='Sequence length for query')
+    parser.add_argument('--seq_kv', type=int, default=4, help='Sequence length for key/value')
+    parser.add_argument('--config', type=str, default='SmallMSAGAConfig', help='Chisel generation config')
+    parser.add_argument('--engine', type=str, default='Verilator', choices=['Verilator', 'FPGA'])
+    parser.add_argument('--build_dir', type=str, default=None)
+    parser.add_argument('--diff', action='store_true', help='Compare result with PyEasyFloat')
+    parser.add_argument('--diff_verbose', action='store_true', help='Enable verbose mode for PyEasyFloat')
+    parser.add_argument('--simulator_bin', type=str, default=None, help='[VerilatorOnly] Path to the simulator binary')
+    parser.add_argument('--vcdfile', type=str, default=None, help='[VerilatorOnly] Path to the VCD file')
+    args = parser.parse_args()
+
+
+    if args.engine == 'Verilator':
+        if args.build_dir is None:
+            build_dir = os.path.join('..', '..', '..', 'sims', 'verilator')
+        else:
+            build_dir = args.build_dir
+        long_name = 'chipyard.harness.TestHarness.' + args.config
+        config_file = os.path.join(
+            build_dir, 'generated-src', long_name,
+            long_name + '.MSAGAConfig.json'
+        )
+        if args.simulator_bin is not None:
+            simulator_bin = args.simulator_bin
+        else:
+            simulator_bin = os.path.join(build_dir, 'simulator-chipyard.harness-' + args.config + '-debug')
+            if not os.path.isfile(simulator_bin):
+                simulator_bin = os.path.join(build_dir, 'simulator-chipyard.harness-' + args.config)
+        if os.path.isfile(simulator_bin):
+            print(f"Using simulator binary: {simulator_bin}")
+        else:
+            raise FileNotFoundError(f"Simulator binary not found: {simulator_bin}")
+        if args.vcdfile is not None:
+            engine = M.VerilatorSimulator(
+                simulator_bin,
+                vcdfile=args.vcdfile
+            )
+        else:
+            engine = M.VerilatorSimulator(
+                simulator_bin
+            )
+    else:
+        assert f"{args.engine} is not supported yet."
+
+
+    if not os.path.isfile(config_file):
+        print(f"Warning: Config file not found: {config_file}. Using default MSAGA config.")
+    else:
+        print(f"Loading config from: {config_file}")
+        cfg = M.load_config(config_file)
+
+    main(
+        args.seq_q, args.seq_kv,
+        d=cfg.sa_rows, br=cfg.sa_cols, bc=cfg.sa_rows, engine=engine,
+        diff_easyfloat=args.diff, easyfloat_verbose=args.diff_verbose
+    )

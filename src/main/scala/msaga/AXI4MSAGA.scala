@@ -11,6 +11,9 @@ import msaga.frontend.{Decoder, Semaphores}
 import msaga.arithmetic._
 import msaga.dma.DMA
 import msaga.utils.Ehr
+import msaga.arithmetic.ArithmeticSyntax._
+import freechips.rocketchip.util.ElaborationArtefacts
+import freechips.rocketchip.subsystem.ExtMem
 
 class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: ArithmeticImpl[E, A])(implicit p: Parameters) extends LazyModule {
   val instBeatBytes = 4
@@ -185,6 +188,29 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       )
     }
 
+
+    val memParams = p(AXI4DirectMemPortKey).getOrElse(p(ExtMem).get)
+    val configJSON = f"""
+    |{
+    |"sa_rows": ${msagaParams.saRows},
+    |"sa_cols": ${msagaParams.saCols},
+    |"inst_queue_size": ${msagaParams.instructionQueueEntries},
+    |"e_type": "${ev.elemType.typeRepr}",
+    |"a_type": "${ev.accType.typeRepr}",
+    |"mem_base": ${memParams.master.base},
+    |"mem_size": ${memParams.master.size},
+    |"mem_align": ${memParams.master.beatBytes},
+    |"spad_base": 0,
+    |"spad_size": ${msagaParams.spadRows * ev.elemType.getWidth / 8},
+    |"acc_base": 0,
+    |"acc_size": ${msagaParams.accRows * ev.accType.getWidth / 8}
+    |}
+    """.stripMargin
+
+    ElaborationArtefacts.add(
+      "MSAGAConfig.json",
+      configJSON
+    )
   }
 }
 

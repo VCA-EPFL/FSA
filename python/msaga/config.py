@@ -1,6 +1,7 @@
 from .dtype import *
+import json
 
-@dataclass
+@dataclass(frozen=True)
 class MSAGAConfig:
     sa_rows: int = 4
     sa_cols: int = 4
@@ -16,3 +17,12 @@ class MSAGAConfig:
     acc_size: int = 0x1000
 
 g_config = MSAGAConfig()
+
+def load_config(config_file: str) -> MSAGAConfig:
+    global g_config
+    with open(config_file, 'r') as f:
+        cfg = json.load(f)
+    cfg["e_type"] = eval(cfg["e_type"])
+    cfg["a_type"] = eval(cfg["a_type"])
+    g_config = MSAGAConfig(**cfg)
+    return g_config

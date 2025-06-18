@@ -4,7 +4,7 @@ import subprocess
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional
-from .instructions import Instruction
+from .kernel import Kernel
 from .tensor import MTile
 from .utils import ElfWriter
 from .config import g_config
@@ -12,7 +12,7 @@ from .dtype import to_numpy_dtype
 
 class BaseEngine(ABC):
     @abstractmethod
-    def execute(self, instructions: list[Instruction], input_tensors: list[MTile], output_tensors: MTile | list[MTile] | None) -> None:
+    def execute(self, kernel: Kernel) -> None | MTile | list[MTile]:
         pass
 
 class VerilatorSimulator(BaseEngine):
@@ -55,15 +55,15 @@ class VerilatorSimulator(BaseEngine):
         writer = ElfWriter(segments, g_config.mem_align)
         writer.write_elf(filename)
 
-    def execute(self, instructions: list[Instruction], input_tensors: list[MTile], output_tensors: MTile | list[MTile] | None) -> None:
+    def execute(self, kernel: Kernel) -> None | MTile | list[MTile]:
         # prepare inputs for simulator
-        ui32_lst = [elem for inst in instructions for elem in inst.to_ui32_list()]
+        ui32_lst = [elem for inst in kernel.instructions for elem in inst.to_ui32_list()]
         bytes  = struct.pack(f'{len(ui32_lst)}I', *ui32_lst)
         inst_file = os.path.join(self.output_dir, 'inst.bin')
         with open(inst_file, 'wb') as f:
             f.write(bytes)
         mem_file = os.path.join(self.output_dir, 'mem.elf')
-        self.dump_mem_elf(mem_file, input_tensors)
+        self.dump_mem_elf(mem_file, kernel.input)
         sim_cmd = [self.simulator_path, inst_file]
         if self.dram_sim:
             sim_cmd.append('+dramsim')
@@ -76,10 +76,10 @@ class VerilatorSimulator(BaseEngine):
             sim_cmd.append(f'+vcdfile={self.vcdfile}')
         output_list: list[MTile]
         output_filenames: list[str] = []
-        if isinstance(output_tensors, MTile):
-            output_list = [output_tensors]
-        elif isinstance(output_tensors, list):
-            output_list = output_tensors
+        if isinstance(kernel.output, MTile):
+            output_list = [kernel.output]
+        elif isinstance(kernel.output, list):
+            output_list = kernel.output
         else:
             output_list = []
         for out in output_list:
@@ -91,5 +91,5 @@ class VerilatorSimulator(BaseEngine):
         for (out, out_filename) in zip(output_list, output_filenames):
             arr = np.fromfile(out_filename, dtype=to_numpy_dtype(out.dtype))
             out.data = arr.tobytes(order='C')
-        return output_tensors
+        return kernel.output
 

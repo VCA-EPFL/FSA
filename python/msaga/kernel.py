@@ -1,16 +1,20 @@
 from typing import Optional
 from .instructions import *
 from .tensor import MTile, STile, ATile
-from .engine import BaseEngine
 from .config import g_config
 from .mem import g_mem_manger
 
+@dataclass
+class Kernel:
+    instructions: list[Instruction]
+    input: list[MTile]
+    output: list[MTile] | MTile | None
+
 class KernelContext:
-    def __init__(self, engine: BaseEngine):
+    def __init__(self):
         self.rows = g_config.sa_rows
         self.cols = g_config.sa_cols
         self.instructions: list[Instruction] = []
-        self.engine = engine
 
     def tile_row_addr(self, tile: ATile | STile) -> int:
         # on-chip SRAMs are not byte-addressed, they are row-addressed
@@ -33,27 +37,22 @@ class KernelContext:
 
 __g_kernel_ctx: Optional[KernelContext] = None
 
-def kernel(engine: BaseEngine):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            global __g_kernel_ctx
-            assert __g_kernel_ctx is None
-            __g_kernel_ctx = KernelContext(engine)
-            ret = func(*args, **kwargs)
-            assert (ret is None) or (isinstance(ret, MTile)) or (isinstance(ret, list[MTile])), \
-                "the return type of MSAGA kernel function can only be one of MTile, list[MTile] or None"
-            inst_bytes = sum(inst.n_bytes for inst in __g_kernel_ctx.instructions)
-            assert inst_bytes <= g_config.inst_queue_size * 4, \
-                f"Instruction queue size exceeded: {inst_bytes} > {g_config.inst_queue_size * 4}"
-            __g_kernel_ctx.engine.execute(
-                __g_kernel_ctx.instructions,
-                g_mem_manger.mem_tensor_list,
-                ret
-            )
-            __g_kernel_ctx = None
-            return ret
-        return wrapper
-    return decorator
+def kernel(func):
+    def wrapper(*args, **kwargs):
+        global __g_kernel_ctx
+        assert __g_kernel_ctx is None, "Nested kernels are not supported yet!"
+        __g_kernel_ctx = KernelContext()
+        ret = func(*args, **kwargs)
+        assert (ret is None) or (isinstance(ret, MTile)) or (isinstance(ret, list)), \
+            "the return type of MSAGA kernel function can only be one of MTile, list[MTile] or None"
+        kernel = Kernel(
+            __g_kernel_ctx.instructions,
+            g_mem_manger.mem_tensor_list,
+            ret
+        )
+        __g_kernel_ctx = None
+        return kernel
+    return wrapper
 
 def check_kernel_ctx(func):
     def wrapper(*args, **kwargs):

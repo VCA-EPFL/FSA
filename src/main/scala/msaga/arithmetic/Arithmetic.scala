@@ -12,6 +12,7 @@ trait ArithmeticOps[T] {
   def minimum: T
   // log2(e) / sqrt(dk)
   def attentionScale(dk: Int): T
+  def typeRepr: String
 }
 
 object Arithmetic {
@@ -35,6 +36,13 @@ object Arithmetic {
         dk = dk,
         projectDir = "generators/easyfloat"
       ).U.asTypeOf(self)
+
+      override def typeRepr: String = (self.expWidth, self.mantissaWidth) match {
+        case (5, 10) => "fp16"
+        case (8, 7) => "bf16"
+        case (8, 23) => "fp32"
+        case (e, m) => f"e${e}m$m"
+      }
     }
   }
 }
@@ -47,6 +55,7 @@ object ArithmeticSyntax {
     def one: T = self.one
     def minimum: T = self.minimum
     def attentionScale(dk: Int): T = self.attentionScale(dk)
+    def typeRepr: String = self.typeRepr
   }
 }
 

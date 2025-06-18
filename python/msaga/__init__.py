@@ -4,7 +4,7 @@ from .kernel import *
 from .tensor import STile, ATile, MTile
 from .engine import VerilatorSimulator
 from .instructions import Semaphore
-from .config import g_config
+from .config import g_config, load_config
 from .mem import g_mem_manger
 from .utils import *
 

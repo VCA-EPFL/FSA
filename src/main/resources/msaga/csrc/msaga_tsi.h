@@ -7,17 +7,6 @@
 #include <fesvr/htif.h>
 #include <fesvr/context.h>
 
-namespace msaga {
-  struct MemDump
-  {
-      uint64_t start_addr;
-      uint64_t size;
-      std::string filename;
-      std::vector<uint8_t> data;
-  };
-}
-
-
 
 class msaga_tsi_t : public tsi_t
 {
@@ -26,7 +15,7 @@ class msaga_tsi_t : public tsi_t
   static const int STATE_ACTIVE = 1;
   static const int STATE_DONE = 2;
   msaga_tsi_t(int argc, char** argv);
-  virtual ~msaga_tsi_t() = default;
+  virtual ~msaga_tsi_t() noexcept override = default;
 
   // hide the original `switch_host` to switch to new host `msaga_host`
   void switch_to_host() { msaga_host.switch_to(); }
@@ -42,7 +31,6 @@ class msaga_tsi_t : public tsi_t
   context_t msaga_host;
 
   static void msaga_host_thread(void *tsi);
-  void dump_memory();
 
 };
 #endif

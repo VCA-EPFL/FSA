@@ -7,10 +7,6 @@
 #include <iostream>
 #include "msaga_tsi.h"
 
-namespace msaga
-{
-    std::vector<MemDump> mem_dumps;
-}
 
 void msaga_tsi_t::msaga_host_thread(void *arg) {
     msaga_tsi_t *tsi = static_cast<msaga_tsi_t*>(arg);
@@ -22,18 +18,6 @@ msaga_tsi_t::msaga_tsi_t(int argc, char** argv) : tsi_t(argc, argv)
     msaga_host.init(msaga_host_thread, this);
 }
 
-void msaga_tsi_t::dump_memory() {
-    for (auto & mem_dump : msaga::mem_dumps) {
-        std::cout << "[MSAGA] Dumping memory to " << mem_dump.filename << "\n";
-        std::ofstream ofs(mem_dump.filename, std::ios::binary);
-        if (!ofs) {
-            throw std::runtime_error("could not open " + mem_dump.filename);
-        }
-        ofs.write(reinterpret_cast<const char*>(mem_dump.data.data()), mem_dump.data.size());
-        // std::cout << "[MSAGA] Memory dump completed: " << mem_dump.filename << "\n";
-    }
-}
-
 void msaga_tsi_t::run() {
     reset();
     load_instructions(target_args()[0]);
@@ -42,7 +26,6 @@ void msaga_tsi_t::run() {
         while (state != msaga_tsi_t::STATE_DONE) {
             read_chunk(0x8008, sizeof(int), &state);
         }
-        dump_memory();
         htif_exit(0);
     }
     stop();

@@ -9,13 +9,80 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+#include <mutex>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
 #include "msaga_tsi.h"
 
 namespace msaga
 {
 
-    extern std::vector<MemDump> mem_dumps;
+    struct MemDump
+    {
+        uint64_t start_addr;
+        uint64_t size;
+        // not necessary to keep filename, but useful for debugging
+        std::string filename;
+        // data maybe accessed by multiple threads
+        std::mutex mutex;
+        uint8_t *data;
+        int fd;
+
+        // -> mutex makes MemDump non-copyable and non-movable, no need to worry about copy/move
+        MemDump(const std::string &cmd)
+        {
+            std::stringstream ss(cmd);
+            std::string start_str, size_str;
+            // Split the string using ':' as delimiter
+            if (std::getline(ss, filename, ':') &&
+                std::getline(ss, start_str, ':') &&
+                std::getline(ss, size_str, ':'))
+            {
+                start_addr = std::stoul(start_str, nullptr, 16);
+                size = std::stoul(size_str, nullptr, 16);
+                fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+                if (fd < 0)
+                {
+                    std::cerr << "[MSAGA] Error opening file: " << filename << "\n";
+                    abort();
+                }
+                if (ftruncate(fd, size) < 0)
+                {
+                    std::cerr << "[MSAGA] Error truncating file: " << filename << "\n";
+                    close(fd);
+                    abort();
+                }
+                data = (uint8_t *)mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                if (data == MAP_FAILED)
+                {
+                    std::cerr << "[MSAGA] Error memory-mapping file: " << filename << "\n";
+                    close(fd);
+                    abort();
+                }
+                printf("[MSAGA] Memory dump configured: %s, start=0x%08lx, size=%lu\n",
+                       filename.c_str(), start_addr, size);
+            }
+            else
+            {
+                std::cerr << "[MSAGA] Error parsing +dump-mem argument: " << cmd << "\n";
+                abort();
+            }
+        };
+
+        ~MemDump()
+        {
+            if (data && data != MAP_FAILED)
+            {
+                munmap(data, size);
+            }
+            if (fd >= 0)
+            {
+                close(fd);
+            }
+        }
+    };
 
     struct AWInfo
     {
@@ -25,16 +92,7 @@ namespace msaga
     };
 
     std::deque<AWInfo> aw_info;
-    void sv_to_uint8_vector(
-        const svOpenArrayHandle arr, std::vector<uint8_t> &dst, int offset)
-    {
-        int byte_count = svSize(arr, 1); // total number of bits
-        for (int i = 0; i < byte_count; ++i)
-        {
-            svGetBitArrElemVecVal((svBitVecVal *)&dst[i + offset], arr, i);
-        }
-    }
-
+    std::vector<std::shared_ptr<MemDump>> mem_dumps;
     bool initialized = false;
 
     void axi_tracker_init()
@@ -47,25 +105,8 @@ namespace msaga
             if (arg.find("+dump-mem=") == 0)
             {
                 std::string value = arg.substr(std::string("+dump-mem=").size());
-                std::stringstream ss(value);
-                std::string start_str, size_str;
-                MemDump mem_dump;
-                // Split the string using ':' as delimiter
-                if (std::getline(ss, mem_dump.filename, ':') &&
-                    std::getline(ss, start_str, ':') &&
-                    std::getline(ss, size_str, ':'))
-                {
-                    mem_dump.start_addr = std::stoul(start_str, nullptr, 16);
-                    mem_dump.size = std::stoul(size_str, nullptr, 16);
-                    mem_dump.data.resize(mem_dump.size);
-                    printf("[MSAGA] Memory dump configured: %s, start=0x%08lx, size=%lu\n",
-                           mem_dump.filename.c_str(), mem_dump.start_addr, mem_dump.size);
-                    mem_dumps.emplace_back(mem_dump);
-                }
-                else
-                {
-                    std::cerr << "[MSAGA] Error parsing +dump-mem argument: " << value << "\n";
-                }
+                auto mem_dump = std::make_shared<MemDump>(value);
+                mem_dumps.emplace_back(mem_dump);
             }
         }
         initialized = true;
@@ -91,7 +132,6 @@ extern "C" void axi_tracker_dpi(
 
     if (aw_fire)
     {
-        // printf("AW: addr=0x%08x, size=%u, len=%u\n", aw_addr, aw_size, aw_len);
         aw_info.push_back({.addr = aw_addr,
                            .size = aw_size,
                            .len = aw_len});
@@ -99,19 +139,28 @@ extern "C" void axi_tracker_dpi(
 
     if (w_fire)
     {
-        // printf("W fire, awinfo size: %zu\n", aw_info.size());
         assert(!aw_info.empty() && "Write without preceding AW");
         // check address of the write
         uint64_t waddr = aw_info.front().addr;
         for (auto &dump : mem_dumps)
         {
-            if (waddr >= dump.start_addr && waddr < dump.start_addr + dump.size)
+            if (waddr >= dump->start_addr && waddr < dump->start_addr + dump->size)
             {
-                size_t offset = waddr - dump.start_addr;
-                // printf("[MSAGA] Writing to memory dump %s at offset %zu (addr=0x%08lx)\n",
-                //       dump.filename.c_str(), offset, waddr);
-                sv_to_uint8_vector(w_data, dump.data, offset);
-                // printf("[MSAGA] Data written to memory dump %s\n", dump.filename.c_str());
+                size_t offset = waddr - dump->start_addr;
+                int bytes = svSize(w_data, 1);
+                assert(bytes <= 32 && "Write data size exceeds 32 bytes");
+                /* create a local buffer to hold the wdata here,
+                   seems that svGetBitArrElemVecVal can not write to
+                   a shared memory region directly.
+                */
+                uint8_t buf[32];
+                for (int i = 0; i < bytes; ++i)
+                {
+                    svGetBitArrElemVecVal((svBitVecVal *)&buf[i], w_data, i);
+                }
+                // transfer local buffer to shared memory
+                std::lock_guard<std::mutex> lock(dump->mutex);
+                memcpy(dump->data + offset, buf, bytes);
             }
         }
         if (w_last)

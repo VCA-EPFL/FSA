@@ -19,16 +19,38 @@ class DMAFunc(Enum):
     LD_SRAM = 0
     ST_SRAM = 1
 
+@dataclass
+class InstructionField:
+    value: int | bool
+    msb: int
+    lsb: int
+    signed: bool = False
+
+    @property
+    def width(self) -> int:
+        return self.msb - self.lsb + 1
+
+    def shifted_value(self) -> int:
+        return (self.value & ((1 << self.width) - 1)) << self.lsb
+
+    def __post_init__(self):
+        if isinstance(self.value, bool):
+            assert not self.signed, "Boolean fields cannot be signed"
+            self.value = int(self.value)
+        if self.signed:
+            assert - (1 << (self.width - 1)) <= self.value < (1 << (self.width - 1)), \
+                f"Value {self.value} cannot be represented in {self.width} bits as signed"
+        else:
+            assert 0 <= self.value < (1 << self.width), \
+                f"Value {self.value} cannot be represented in {self.width} bits as unsigned"
+
+
 class InstructionLike(ABC):
 
-    def combine_fields(fs: Sequence[tuple[int|bool, int, int]]) -> int:
+    def combine_fields(fs: Sequence[InstructionField]) -> int:
         bits = 0
-        for x, msb, lsb in fs:
-            if isinstance(x, bool):
-                x = int(x)
-            n_bits = msb - lsb + 1
-            x &= ((1 << n_bits) - 1)
-            bits |= x << lsb
+        for f in fs:
+            bits |= f.shifted_value()
         return bits
 
     @property
@@ -80,10 +102,10 @@ class FenceInstruction(Instruction):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.i_type.value, 31, 29),
-            (self.mx, 28, 28),
-            (self.dma, 27, 27),
-            (self.stop, 26, 26),
+            InstructionField(self.i_type.value, 31, 29),
+            InstructionField(self.mx, 28, 28),
+            InstructionField(self.dma, 27, 27),
+            InstructionField(self.stop, 26, 26),
         ))
 
 @dataclass
@@ -99,13 +121,13 @@ class MatrixInstructionHeader(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.semId, 28, 24),
-            (self.acquireValid, 23, 23),
-            (self.acquireSemValue, 22, 20),
-            (self.releaseValid, 19, 19),
-            (self.releaseSemValue, 18, 16),
-            (self.func, 15, 11),
-            (self.waitPrevAcc, 10, 10)
+            InstructionField(self.semId, 28, 24),
+            InstructionField(self.acquireValid, 23, 23),
+            InstructionField(self.acquireSemValue, 22, 20),
+            InstructionField(self.releaseValid, 19, 19),
+            InstructionField(self.releaseSemValue, 18, 16),
+            InstructionField(self.func, 15, 11),
+            InstructionField(self.waitPrevAcc, 10, 10)
         ))
 
 @dataclass
@@ -119,11 +141,11 @@ class MatrixInstructionSpad(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.addr, 31, 12),
-            (self.stride, 11, 7),
-            (self.revInput, 6, 6),
-            (self.revOutput, 5, 5),
-            (self.delayOutput, 4, 4),
+            InstructionField(self.addr, 31, 12),
+            InstructionField(self.stride, 11, 7, signed=True),
+            InstructionField(self.revInput, 6, 6),
+            InstructionField(self.revOutput, 5, 5),
+            InstructionField(self.delayOutput, 4, 4),
         ))
 
 @dataclass
@@ -135,9 +157,9 @@ class MatrixInstrucionAcc(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.addr, 31, 12),
-            (self.stride, 11, 7),
-            (self.zero, 6, 6),
+            InstructionField(self.addr, 31, 12),
+            InstructionField(self.stride, 11, 7, signed=True),
+            InstructionField(self.zero, 6, 6),
         ))
 
 @dataclass
@@ -157,10 +179,10 @@ class MatrixInstruction(Instruction):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.header.bits, 28, 0),
-            (self.i_type.value, 31, 29),
-            (self.spad.bits, 63, 32),
-            (self.acc.bits, 95, 64),
+            InstructionField(self.header.bits, 28, 0),
+            InstructionField(self.i_type.value, 31, 29),
+            InstructionField(self.spad.bits, 63, 32),
+            InstructionField(self.acc.bits, 95, 64),
         ))
 
 @dataclass
@@ -176,13 +198,13 @@ class DMAInstructionHeader(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.semId, 28, 24),
-            (self.acquireValid, 23, 23),
-            (self.acquireSemValue, 22, 20),
-            (self.releaseValid, 19, 19),
-            (self.releaseSemValue, 18, 16),
-            (self.func, 15, 12),
-            (self.repeat, 11, 3)
+            InstructionField(self.semId, 28, 24),
+            InstructionField(self.acquireValid, 23, 23),
+            InstructionField(self.acquireSemValue, 22, 20),
+            InstructionField(self.releaseValid, 19, 19),
+            InstructionField(self.releaseSemValue, 18, 16),
+            InstructionField(self.func, 15, 12),
+            InstructionField(self.repeat, 11, 3)
         ))
 
 
@@ -195,9 +217,9 @@ class DMAInstrucionSRAM(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.addr, 31, 12),
-            (self.stride, 11, 7),
-            (self.isAccum, 6, 6),
+            InstructionField(self.addr, 31, 12),
+            InstructionField(self.stride, 11, 7, signed=True),
+            InstructionField(self.isAccum, 6, 6),
         ))
 
 
@@ -210,9 +232,9 @@ class DMAInstrucionMem(InstructionLike):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.addr, 63, 25),
-            (self.stride, 24, 15),
-            (self.size, 14, 5)
+            InstructionField(self.addr, 63, 25),
+            InstructionField(self.stride, 24, 10, signed=True),
+            InstructionField(self.size, 9, 0)
         ))
 
 @dataclass
@@ -232,10 +254,10 @@ class DMAInstruction(Instruction):
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
-            (self.header.bits, 28, 0),
-            (self.i_type.value, 31, 29),
-            (self.sram.bits, 63, 32),
-            (self.mem.bits, 127, 64),
+            InstructionField(self.header.bits, 28, 0),
+            InstructionField(self.i_type.value, 31, 29),
+            InstructionField(self.sram.bits, 63, 32),
+            InstructionField(self.mem.bits, 127, 64),
         ))
 
 class Semaphore:
@@ -251,8 +273,3 @@ class Semaphore:
         else:
             self.value += 1
         return self
-
-    def to_inst_field(self) -> int:
-        #   id    v
-        # |xxxxx|xxx|
-        return (self.id << 3) | self.value

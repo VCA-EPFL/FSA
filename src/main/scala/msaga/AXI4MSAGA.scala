@@ -56,6 +56,11 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     val perfCntDMABusy = RegInit(0.U(32.W))
     val perfCntInstWait = RegInit(0.U(32.W))
     val perfCntInstBusy = RegInit(0.U(32.W))
+    val perfCntRawInst = RegInit(0.U(32.W))
+    val perfCntMxInst = RegInit(0.U(32.W))
+    val perfCntDMAInst = RegInit(0.U(32.W))
+    val perfCntFence = RegInit(0.U(32.W))
+
 
     configNode.regmap(
       0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
@@ -67,7 +72,11 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       0x18 -> Seq(RegField.r(32, perfCntDMAWait)),
       0x1C -> Seq(RegField.r(32, perfCntDMABusy)),
       0x20 -> Seq(RegField.r(32, perfCntInstWait)),
-      0x24 -> Seq(RegField.r(32, perfCntInstBusy))
+      0x24 -> Seq(RegField.r(32, perfCntInstBusy)),
+      0x28 -> Seq(RegField.r(32, perfCntRawInst)),
+      0x2C -> Seq(RegField.r(32, perfCntMxInst)),
+      0x30 -> Seq(RegField.r(32, perfCntDMAInst)),
+      0x34 -> Seq(RegField.r(32, perfCntFence))
     )
 
     switch(state) {
@@ -93,6 +102,10 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
           perfCntDMABusy := 0.U
           perfCntInstWait := 0.U
           perfCntInstBusy := 0.U
+          perfCntRawInst := 0.U
+          perfCntMxInst := 0.U
+          perfCntDMAInst := 0.U
+          perfCntFence := 0.U
           state := s_active
         }
       }
@@ -176,6 +189,18 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
       }
       when(!rawInstQueue.io.deq.valid && rawInstQueue.io.deq.ready && firstInstFire) {
         perfCntInstWait := perfCntInstWait + 1.U
+      }
+      when(rawInstQueue.io.deq.fire) {
+        perfCntRawInst := perfCntRawInst + 1.U
+      }
+      when(msaga.io.inst.fire) {
+        perfCntMxInst := perfCntMxInst + 1.U
+      }
+      when(dma.module.io.inst.fire) {
+        perfCntDMAInst := perfCntDMAInst + 1.U
+      }
+      when(decoder.io.outFence.fire) {
+        perfCntFence := perfCntFence + 1.U
       }
     }
 

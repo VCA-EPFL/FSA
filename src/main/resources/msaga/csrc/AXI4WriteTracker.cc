@@ -91,32 +91,46 @@ namespace msaga
         uint8_t len;
     };
 
-    std::deque<AWInfo> aw_info;
+    // mem_dumps is shared among all trackers
     std::vector<std::shared_ptr<MemDump>> mem_dumps;
-    bool initialized = false;
-
-    void axi_tracker_init()
-    {
-        s_vpi_vlog_info info;
-        assert(vpi_get_vlog_info(&info) && "Failed to get VPI vlog info");
-        for (int i = 1; i < info.argc; i++)
-        {
-            std::string arg(info.argv[i]);
-            if (arg.find("+dump-mem=") == 0)
-            {
-                std::string value = arg.substr(std::string("+dump-mem=").size());
-                auto mem_dump = std::make_shared<MemDump>(value);
-                mem_dumps.emplace_back(mem_dump);
-            }
-        }
-        initialized = true;
-    }
-
+    // only use the first tracker to initialize mem_dumps
+    std::mutex init_mutex;
+    bool mem_dump_created = false;
 }
 
 using namespace msaga;
 
+// return the pointer to AWInfo of the current tracker
+extern "C" void* axi_tracker_init()
+{
+    auto aw_info = new std::deque<AWInfo>();
+
+    {
+        std::lock_guard<std::mutex> lock(init_mutex);
+        if (mem_dump_created)
+        {
+            return (void *)aw_info; // already initialized
+        }
+        mem_dump_created = true;
+    }
+
+    s_vpi_vlog_info info;
+    assert(vpi_get_vlog_info(&info) && "Failed to get VPI vlog info");
+    for (int i = 1; i < info.argc; i++)
+    {
+        std::string arg(info.argv[i]);
+        if (arg.find("+dump-mem=") == 0)
+        {
+            std::string value = arg.substr(std::string("+dump-mem=").size());
+            auto mem_dump = std::make_shared<MemDump>(value);
+            mem_dumps.emplace_back(mem_dump);
+        }
+    }
+    return (void *)aw_info;
+}
+
 extern "C" void axi_tracker_dpi(
+    void* aw_info_ptr,
     svBit aw_fire,
     uint64_t aw_addr,
     uint8_t aw_size,
@@ -125,51 +139,47 @@ extern "C" void axi_tracker_dpi(
     const svOpenArrayHandle w_data,
     svBit w_last)
 {
-    if (!initialized)
-    {
-        axi_tracker_init();
-    }
+    auto aw_info = (std::deque<AWInfo> *)aw_info_ptr;
 
     if (aw_fire)
     {
-        aw_info.push_back({.addr = aw_addr,
-                           .size = aw_size,
-                           .len = aw_len});
+        aw_info->emplace_back(AWInfo{aw_addr, aw_size, aw_len});
     }
 
     if (w_fire)
     {
-        assert(!aw_info.empty() && "Write without preceding AW");
+        assert(!aw_info->empty() && "Write without preceding AW");
         // check address of the write
-        uint64_t waddr = aw_info.front().addr;
+        uint64_t waddr = aw_info->front().addr;
         for (auto &dump : mem_dumps)
         {
             if (waddr >= dump->start_addr && waddr < dump->start_addr + dump->size)
             {
                 size_t offset = waddr - dump->start_addr;
                 int bytes = svSize(w_data, 1);
-                assert(bytes <= 32 && "Write data size exceeds 32 bytes");
                 /* create a local buffer to hold the wdata here,
                    seems that svGetBitArrElemVecVal can not write to
                    a shared memory region directly.
                 */
-                uint8_t buf[32];
+                std::vector<uint8_t> w_data_arr(bytes);
                 for (int i = 0; i < bytes; ++i)
                 {
-                    svGetBitArrElemVecVal((svBitVecVal *)&buf[i], w_data, i);
+                    svGetBitArrElemVecVal((svBitVecVal *)(w_data_arr.data() + i), w_data, i);
                 }
                 // transfer local buffer to shared memory
                 std::lock_guard<std::mutex> lock(dump->mutex);
-                memcpy(dump->data + offset, buf, bytes);
+                memcpy(dump->data + offset, w_data_arr.data(), bytes);
             }
         }
         if (w_last)
         {
-            aw_info.pop_front();
+            assert(aw_info->front().len == 0 && "Write with WLAST but AW length not zero");
+            aw_info->pop_front();
         }
         else
         {
-            aw_info.front().addr += (1 << aw_info.front().size);
+            aw_info->front().addr += (1 << aw_info->front().size);
+            aw_info->front().len--;
         }
     }
 }

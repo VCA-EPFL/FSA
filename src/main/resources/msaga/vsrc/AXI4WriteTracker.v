@@ -1,4 +1,8 @@
+
+import "DPI-C" function chandle axi_tracker_init();
+
 import "DPI-C" function void axi_tracker_dpi(
+    input chandle aw_info_ptr,
     input bit aw_fire,
     input int unsigned aw_addr,
     input byte aw_size,
@@ -23,6 +27,8 @@ module AXI4WriteTracker #(
     input [DATA_BITS-1:0] w_data,
     input             w_last
 );
+    reg initialized = 1'b0;
+    chandle aw_info_ptr;
 
     byte __w_data[(DATA_BITS / 8)-1:0];
     generate
@@ -32,7 +38,12 @@ module AXI4WriteTracker #(
     endgenerate
 
     always @(posedge clock) begin
+        if (!initialized) begin
+            aw_info_ptr = axi_tracker_init();
+            initialized = 1'b1;
+        end
         axi_tracker_dpi(
+            aw_info_ptr,
             aw_fire,
             aw_addr,
             aw_size,

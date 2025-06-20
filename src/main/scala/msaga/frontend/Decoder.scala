@@ -62,7 +62,7 @@ class Decoder(memAddrWidth: Int)(implicit p: Parameters) extends MSAGAModule {
   io.outDMA.bits := dma.io.out.bits.asTypeOf(io.outDMA.bits)
   dma.io.out.ready := io.outDMA.ready
 
-  io.outFence.valid := selFence
+  io.outFence.valid := selFence && io.in.valid
   io.outFence.bits := io.in.bits.asTypeOf(io.outFence.bits)
 
   io.in.ready := Mux(selMx, mx.io.in.ready, Mux(selDma, dma.io.in.ready, io.outFence.ready))

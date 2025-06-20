@@ -47,7 +47,7 @@ case class MSAGAInjector[E <: Data : Arithmetic, A <: Data : Arithmetic](arithme
 
 class WithFpMSAGA
 (
-  params: MSAGAParams = Configs.smallMSAGAParams,
+  params: MSAGAParams = Configs.msaga4x4,
   arithmeticImpl: ArithmeticImpl[FloatPoint, FloatPoint] = Configs.fp16MulFp32AddArithmeticImpl
 ) extends Config((site, here, up) => {
   case MSAGAKey => Some(params)
@@ -86,33 +86,55 @@ trait CanHaveMSAGADirectAXI4 { this: BaseSubsystem =>
     val axi4SlaveNode = AXI4SlaveNode(memPortParamsOpt.map({ case MemoryPortParams(memPortParams, nMemoryChannels, _) =>
       Seq.tabulate(nMemoryChannels) { channel =>
         val base = AddressSet.misaligned(memPortParams.base, memPortParams.size)
-        val filter = AddressSet(channel * mbus.blockBytes, ~((nMemoryChannels-1) * mbus.blockBytes))
+        val blockBytes = memPortParams.maxXferBytes
+        val filter = AddressSet(channel * blockBytes, ~((nMemoryChannels-1) * blockBytes))
 
         AXI4SlavePortParameters(
           slaves = Seq(AXI4SlaveParameters(
             address       = base.flatMap(_.intersect(filter)),
             regionType    = RegionType.UNCACHED, // cacheable
             executable    = true,
-            supportsWrite = TransferSizes(1, mbus.blockBytes),
-            supportsRead  = TransferSizes(1, mbus.blockBytes),
+            supportsWrite = TransferSizes(1, blockBytes),
+            supportsRead  = TransferSizes(1, blockBytes),
             interleavedId = Some(0))), // slave does not interleave read responses
           beatBytes = memPortParams.beatBytes)
       }
     }).toList.flatten)
 
-    axi4SlaveNode :*=* msaga.memNode
+    axi4SlaveNode :=* msaga.memNode
     val msaga_axi4 = InModuleBody{ axi4SlaveNode.makeIOs() }
     (domain, msaga, msaga_axi4)
   }.unzip3
 }
 
 object Configs {
-  lazy val smallMSAGAParams = MSAGAParams(
-    saRows = 4, saCols = 4, spadRows = 256, accRows = 32
-  )
-  lazy val largeMSAGAParams = MSAGAParams(
-   saRows = 128, saCols = 128, spadRows = 128 * 4 * 16, accRows = 128 * 2
-  )
+
+  def defaultMSAGAParams(rows: Int, cols: Int, memPorts: Int): MSAGAParams = {
+    /*
+      SPAD:
+      2 tile for Q in spad (cols)
+      2x2 tiles for K and V for double buffering in spad
+      Accumulator:
+      1 row in accumulator for log exp sum
+      1 tile for output O
+    */
+    MSAGAParams(
+      rows, cols,
+      // 2 tiles for Q, 2x2 tiles for K and V
+      spadRows = 2 * cols + 4 * rows,
+      // 1 row for log exp sum, 1 tile for output O
+      accRows = 1 + rows,
+      nMemPorts = memPorts,
+    )
+  }
+
+  lazy val msaga4x4 = defaultMSAGAParams(4, 4, 1)
+  lazy val msaga8x8 = defaultMSAGAParams(8, 8, 1)
+  lazy val msaga16x16 = defaultMSAGAParams(16, 16, 2)
+  lazy val msaga32x32 = defaultMSAGAParams(32, 32, 4)
+  lazy val msaga64x64 = defaultMSAGAParams(64, 64, 8)
+  lazy val msaga128x128 = defaultMSAGAParams(128, 128, 16)
+
   lazy val fp16MulFp32AddArithmeticImpl = new FPArithmeticImpl(5, 10, 8, 23)
   lazy val bf16MulFp32AddArithmeticImpl = new FPArithmeticImpl(8, 7, 8, 23)
   lazy val fp32ArithmeticImpl = new FPArithmeticImpl(8, 23, 8, 23)

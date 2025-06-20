@@ -6,31 +6,50 @@ import freechips.rocketchip.amba.axi4._
 import msaga.{SRAMNarrowRead, SRAMNarrowWrite}
 import msaga.frontend.Semaphore
 import msaga.isa.ISA.Constants._
-import msaga.utils.DelayedAssert
+import msaga.utils.{DelayedAssert, Ehr}
 
 abstract class BaseLoadStoreQueue(reqGen: DMARequest, n: Int) extends Module {
 
   val io = IO(new Bundle {
     val req = Flipped(Decoupled(reqGen))
+    val semAcquire = Decoupled(new Semaphore)
     val semRelease = Decoupled(new Semaphore)
     val doSemRelease = Output(Bool())
     val busy = Output(Bool())
+    val active = Output(Bool())
   })
 
   class Entry extends Bundle {
     val req = reqGen.cloneType
     val rRepeat = UInt(DMA_REPEAT_BITS.W)
+    val depReady = Bool()
   }
 
   val entryValid = RegInit(VecInit(Seq.fill(n)(false.B)))
   val entries = Reg(Vec(n, new Entry))
 
   val enqPtr = Counter(n)
+  val acqPtr = Counter(n)
   val deqPtr = Counter(n)
+
+  // acquire semaphore before executing the request
+  val acqEntry = entries(acqPtr.value)
+  io.semAcquire.valid := entryValid(acqPtr.value) && acqEntry.req.acquireValid
+  io.semAcquire.bits.id := acqEntry.req.semId
+  io.semAcquire.bits.value := acqEntry.req.acquireSemValue
+  when(io.semAcquire.fire || entryValid(acqPtr.value) && !acqEntry.req.acquireValid) {
+    acqEntry.req.acquireValid := false.B
+    acqEntry.depReady := true.B
+    acqPtr.inc()
+  }
+
+  def valid(ptr: Counter): Bool = {
+    entryValid(ptr.value) && entries(ptr.value).depReady
+  }
 
   // deq request
   val deqEntry = entries(deqPtr.value)
-  io.semRelease.valid := entryValid(deqPtr.value) && deqEntry.rRepeat === 0.U
+  io.semRelease.valid := valid(deqPtr) && deqEntry.rRepeat === 0.U
   io.semRelease.bits.id := deqEntry.req.semId
   io.semRelease.bits.value := deqEntry.req.releaseSemValue
   io.doSemRelease := deqEntry.req.releaseValid
@@ -43,12 +62,14 @@ abstract class BaseLoadStoreQueue(reqGen: DMARequest, n: Int) extends Module {
   when(io.req.fire) {
     entries(enqPtr.value).req := io.req.bits
     entries(enqPtr.value).rRepeat := io.req.bits.repeat
+    entries(enqPtr.value).depReady := false.B
     entryValid(enqPtr.value) := true.B
     enqPtr.inc()
   }
 
   io.req.ready := !entryValid(enqPtr.value)
   io.busy := entryValid(deqPtr.value)
+  io.active := valid(deqPtr)
 }
 
 
@@ -69,7 +90,7 @@ class StoreQueue
 
   val awEntry = entries(awPtr.value)
 
-  aw.valid := entryValid(awPtr.value)
+  aw.valid := valid(awPtr) && awEntry.req.repeat =/= 0.U
   aw.bits.addr := awEntry.req.memAddr
   aw.bits.addr := awEntry.req.memAddr
   aw.bits.id := 0.U
@@ -97,12 +118,12 @@ class StoreQueue
   val rLast = rBeatCnt === (nBeats - 1).U
   val writeQueue = Module(new Queue(UInt(beatBits.W), entries = 2, pipe = true))
   DelayedAssert(!writeQueue.io.enq.valid || writeQueue.io.enq.ready)
-
+  val queueCntNext = Mux(writeQueue.io.enq.valid,
+    Mux(writeQueue.io.deq.fire, writeQueue.io.count, writeQueue.io.count + 1.U),
+    Mux(writeQueue.io.deq.fire, writeQueue.io.count - 1.U, writeQueue.io.count)
+  )
   val rEntry = entries(rPtr.value)
-  accRead.valid := entryValid(rPtr.value) && Mux(writeQueue.io.enq.valid,
-    writeQueue.io.count === 0.U,
-    writeQueue.io.enq.ready
-  ) && (rEntry.rRepeat > rEntry.req.repeat)
+  accRead.valid := valid(rPtr) && queueCntNext < writeQueue.entries.U
   accRead.addr := rEntry.req.sramAddr
   accRead.subBankIdx := rBeatCnt
   writeQueue.io.enq.valid := RegNext(accRead.fire, init = false.B)
@@ -149,7 +170,7 @@ class LoadQueue[E <: Data]
 
   // read address
   val arEntry = entries(arPtr.value)
-  ar.valid := entryValid(arPtr.value) && arEntry.req.repeat =/= 0.U
+  ar.valid := valid(arPtr) && arEntry.req.repeat =/= 0.U
   ar.bits.addr := arEntry.req.memAddr
   ar.bits.id := 0.U
   ar.bits.len := (arEntry.req.size >> log2Up(edge.slave.beatBytes)).asUInt - 1.U

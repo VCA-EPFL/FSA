@@ -24,11 +24,13 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
 
   val io = IO(new Bundle {
     val inst = Flipped(Decoupled(new DMAInstruction(sramAddrWidth, memAddrWidth)))
-    val semaphoreAcquire = Decoupled(new Semaphore)
-    val semaphoreRelease = Valid(new Semaphore)
+    // one for load and one for storek
+    val semaphoreAcquire = Vec(2, Decoupled(new Semaphore))
+    val semaphoreRelease = Vec(2, Valid(new Semaphore))
     val spadWrite = Vec(nPorts, new SRAMNarrowWrite(sramAddrWidth, outer.spadElemWidth, outer.spadRowSize, beatBytes))
     val accRead = Vec(nPorts, new SRAMNarrowRead(sramAddrWidth, outer.accElemWidth, outer.accRowSize, beatBytes))
     val busy = Output(Bool())
+    val active = Output(Bool())
   })
 
   val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
@@ -50,79 +52,57 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
   val partitioner = Module(new RequestPartitioner(chiselTypeOf(dmaReq.bits), nPorts))
   partitioner.io.in <> dmaReq
 
-  val acqFlag = Ehr(2, Bool(), Some(false.B))
   val outReq = partitioner.io.out.bits.head
-  io.semaphoreAcquire.valid := partitioner.io.out.valid && outReq.acquireValid
-  io.semaphoreAcquire.bits.id := outReq.semId
-  io.semaphoreAcquire.bits.value := outReq.acquireSemValue
-  when(io.semaphoreAcquire.fire) {
-    acqFlag.write(0, true.B)
-  }
-  when(partitioner.io.out.fire) {
-    acqFlag.write(1, false.B)
-  }
-  val depReady = !outReq.acquireValid || acqFlag.read(1)
+
   val (loadQueues, storeQueues) = io.spadWrite.zip(io.accRead).zip(partitioner.io.out.bits).zip(node.out).map{
     case (((spad, acc), req), (axi, edge)) =>
-      val loadHandler = Module(new LoadQueue(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight, spad))
-      val storeHandler = Module(new StoreQueue(edge, chiselTypeOf(dmaReq.bits), dmaStoreInflight, acc))
-      loadHandler.io.req.valid := partitioner.io.out.valid && outReq.isLoad && depReady
-      loadHandler.io.req.bits := req
-      storeHandler.io.req.valid := partitioner.io.out.valid && !outReq.isLoad && depReady
-      storeHandler.io.req.bits := req
-      axi.ar <> loadHandler.ar
-      axi.aw <> storeHandler.aw
-      loadHandler.r <> axi.r
-      axi.w <> storeHandler.w
-      storeHandler.b <> axi.b
-      spad <> loadHandler.spadWrite
-      acc <> storeHandler.accRead
-      (loadHandler, storeHandler)
+      val loadQueue = Module(new LoadQueue(edge, chiselTypeOf(dmaReq.bits), dmaLoadInflight, spad))
+      val storeQueue = Module(new StoreQueue(edge, chiselTypeOf(dmaReq.bits), dmaStoreInflight, acc))
+      loadQueue.io.req.valid := partitioner.io.out.valid && outReq.isLoad
+      loadQueue.io.req.bits := req
+      storeQueue.io.req.valid := partitioner.io.out.valid && !outReq.isLoad
+      storeQueue.io.req.bits := req
+      axi.ar <> loadQueue.ar
+      axi.aw <> storeQueue.aw
+      loadQueue.r <> axi.r
+      axi.w <> storeQueue.w
+      storeQueue.b <> axi.b
+      spad <> loadQueue.spadWrite
+      acc <> storeQueue.accRead
+      (loadQueue, storeQueue)
   }.unzip
 
-  val loadReady = Cat(loadQueues.map(_.io.req.ready)).andR
-  val storeReady = Cat(storeQueues.map(_.io.req.ready)).andR
-  partitioner.io.out.ready := Mux(outReq.isLoad, loadReady, storeReady) && depReady
-
-
-  io.busy := Cat(
-    dmaReq.valid,
-    partitioner.io.out.valid,
-    Cat(loadQueues.map(_.io.busy)).orR,
-    Cat(storeQueues.map(_.io.busy)).orR
-  ).orR
-
-  val loadSemWrite = Wire(Decoupled(new Semaphore))
-  val storeSemWrite = Wire(Decoupled(new Semaphore))
-
-  loadSemWrite.valid := Cat(loadQueues.map(_.io.semRelease.valid)).andR
-  loadSemWrite.bits := loadQueues.head.io.semRelease.bits
-  loadQueues.foreach(_.io.semRelease.ready := loadSemWrite.fire)
-
-  storeSemWrite.valid := Cat(storeQueues.map(_.io.semRelease.valid)).andR
-  storeSemWrite.bits := storeQueues.head.io.semRelease.bits
-  storeQueues.foreach(_.io.semRelease.ready := storeSemWrite.fire)
-
-  val arb = Module(new Arbiter(new Semaphore, 2))
-  arb.io.in(0) <> loadSemWrite
-  arb.io.in(1) <> storeSemWrite
-  arb.io.out.ready := true.B
-  io.semaphoreRelease.valid := arb.io.out.valid && Mux(arb.io.in(0).fire,
-    loadQueues.head.io.doSemRelease,
-    storeQueues.head.io.doSemRelease
+  /* To simplify the design, we deq all load queues or all store queues
+     at the same time, so their enq ready signals should be synchronized.
+   */
+  partitioner.io.out.ready := Mux(outReq.isLoad,
+    loadQueues.head.io.req.ready,
+    storeQueues.head.io.req.ready
   )
-  io.semaphoreRelease.bits := arb.io.out.bits
 
-  for (i <- 1 until nPorts) {
-    DelayedAssert(!loadSemWrite.fire ||
-      loadQueues(i).io.semRelease.bits.asUInt === io.semaphoreRelease.bits.asUInt
-    )
-  }
-  for (i <- 1 until nPorts) {
-    DelayedAssert(!storeSemWrite.fire ||
-        storeQueues(i).io.semRelease.bits.asUInt === io.semaphoreRelease.bits.asUInt
-    )
-  }
+  io.active := loadQueues.head.io.active || storeQueues.head.io.active
+  io.busy := loadQueues.head.io.busy || storeQueues.head.io.busy || dmaReq.valid || partitioner.io.out.valid
+
+  val loadSemRelease = Wire(Valid(new Semaphore))
+  val storeSemRelease = Wire(Valid(new Semaphore))
+
+  // wait until all load finish
+  loadSemRelease.valid := Cat(loadQueues.map(_.io.semRelease.valid)).andR && loadQueues.head.io.doSemRelease
+  loadSemRelease.bits := loadQueues.head.io.semRelease.bits
+  loadQueues.foreach(_.io.semRelease.ready := loadSemRelease.fire)
+
+  // wait until all store finish
+  storeSemRelease.valid := Cat(storeQueues.map(_.io.semRelease.valid)).andR && storeQueues.head.io.doSemRelease
+  storeSemRelease.bits := storeQueues.head.io.semRelease.bits
+  storeQueues.foreach(_.io.semRelease.ready := storeSemRelease.fire)
+
+  io.semaphoreRelease.head <> loadSemRelease
+  io.semaphoreRelease.last <> storeSemRelease
+
+  io.semaphoreAcquire.head <> loadQueues.head.io.semAcquire
+  io.semaphoreAcquire.last <> storeQueues.head.io.semAcquire
+  loadQueues.tail.foreach(_.io.semAcquire.ready := io.semaphoreAcquire.head.ready)
+  storeQueues.tail.foreach(_.io.semAcquire.ready := io.semaphoreAcquire.last.ready)
 
 }
 

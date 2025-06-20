@@ -22,8 +22,7 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     O_t_BLOCKS = O_t.split(br, dim=-1) # [d, br]
 
     # [Br, d]
-    Q_tile = M.alloc_spad((br, d))
-    Q_tile_rev = Q_tile.reverse(dim=0)
+    Q_tiles = [M.alloc_spad((br, d)) for _ in range(2)]
     # log exp sum [Br, 1]
     L_tile = M.alloc_accumulator((1, br))
     # [d, Br]
@@ -33,12 +32,15 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     K_tiles = [M.alloc_spad((bc, d)) for _ in range(2)]
     V_t_tiles = [M.alloc_spad((d, bc)) for _ in range(2)]
 
-    sem_q = M.Semaphore(id=1, n=2)
+    sem_q_lst = [M.Semaphore(id=0, n=2), M.Semaphore(id=1, n=2)]
     sem_k_lst = [M.Semaphore(id=2, n=2), M.Semaphore(id=3, n=2)]
     sem_v_lst = [M.Semaphore(id=4, n=2), M.Semaphore(id=5, n=2)]
     sem_o = M.Semaphore(id=6, n=2)
 
     for i, Q_i in enumerate(Q_BLOCKS):
+        Q_tile = Q_tiles[i % 2]
+        sem_q = sem_q_lst[i % 2]
+        Q_tile_rev = Q_tile.reverse(dim=0)
         M.load_tile(Q_i, Q_tile, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
             is_first_iter = j == 0
@@ -108,14 +110,15 @@ def main(
     Q_np = np.random.rand(seq_q, d).astype(np.float16)
     K_np = np.random.rand(seq_kv, d).astype(np.float16)
     V_np = np.random.rand(seq_kv, d).astype(np.float16)
-    Q = M.from_numpy(Q_np)
-    K = M.from_numpy(K_np)
-    V_t = M.from_numpy(V_np.T)
-    O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc))
-    O = M.to_numpy(O_t).T
-    impls = {
-        'MSAGA': O,
-    }
+
+    impls = {}
+    if engine:
+        Q = M.from_numpy(Q_np)
+        K = M.from_numpy(K_np)
+        V_t = M.from_numpy(V_np.T)
+        O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc))
+        O = M.to_numpy(O_t).T
+        impls['MSAGA'] = O
 
     if diff_easyfloat:
         print("Comparing with PyEasyFloat...")
@@ -141,21 +144,25 @@ if __name__ == "__main__":
     parser.add_argument('--build_dir', type=str, default=None)
     parser.add_argument('--diff', action='store_true', help='Compare result with PyEasyFloat')
     parser.add_argument('--diff_verbose', action='store_true', help='Enable verbose mode for PyEasyFloat')
+    parser.add_argument('--diff_only', action='store_true', help='Only run PyEasyFloat, skip real hardware execution')
     parser.add_argument('--simulator_bin', type=str, default=None, help='[VerilatorOnly] Path to the simulator binary')
     parser.add_argument('--vcdfile', type=str, default=None, help='[VerilatorOnly] Path to the VCD file')
     args = parser.parse_args()
 
+    if args.build_dir is None:
+        build_dir = os.path.join('..', '..', '..', 'sims', 'verilator')
+    else:
+        build_dir = args.build_dir
+    long_name = 'chipyard.harness.TestHarness.' + args.config
+    config_file = os.path.join(
+        build_dir, 'generated-src', long_name,
+        long_name + '.MSAGAConfig.json'
+    )
 
-    if args.engine == 'Verilator':
-        if args.build_dir is None:
-            build_dir = os.path.join('..', '..', '..', 'sims', 'verilator')
-        else:
-            build_dir = args.build_dir
-        long_name = 'chipyard.harness.TestHarness.' + args.config
-        config_file = os.path.join(
-            build_dir, 'generated-src', long_name,
-            long_name + '.MSAGAConfig.json'
-        )
+    if args.diff_only:
+        engine = None
+    elif args.engine == 'Verilator':
+
         if args.simulator_bin is not None:
             simulator_bin = args.simulator_bin
         else:

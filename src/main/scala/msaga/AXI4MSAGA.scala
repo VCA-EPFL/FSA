@@ -49,34 +49,36 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
 
     val firstInstFire = RegInit(false.B)
 
-    val perfCntExecTime = RegInit(0.U(32.W))
-    val perfCntMxWait = RegInit(0.U(32.W))
-    val perfCntMxBusy = RegInit(0.U(32.W))
-    val perfCntDMAWait = RegInit(0.U(32.W))
-    val perfCntDMABusy = RegInit(0.U(32.W))
-    val perfCntInstWait = RegInit(0.U(32.W))
-    val perfCntInstBusy = RegInit(0.U(32.W))
-    val perfCntRawInst = RegInit(0.U(32.W))
-    val perfCntMxInst = RegInit(0.U(32.W))
-    val perfCntDMAInst = RegInit(0.U(32.W))
-    val perfCntFence = RegInit(0.U(32.W))
+    val perfCounters = scala.collection.mutable.TreeMap[String, UInt]()
 
+    def addPerfCounter(name: String): UInt = {
+      val counter = RegInit(0.U(32.W))
+      counter.suggestName(f"perfCnt_$name")
+      perfCounters(name) = counter
+      counter
+    }
+
+    val perfCntExecTime = addPerfCounter("execTime")
+    val perfCntMxBubble = addPerfCounter("mxBubble")
+    val perfCntMxActive = addPerfCounter("mxActive")
+    val perfCntDMAActive = addPerfCounter("dmaActive")
+    val perfCntRawInst = addPerfCounter("rawInst")
+    val perfCntMxInst = addPerfCounter("mxInst")
+    val perfCntDMAInst = addPerfCounter("dmaInst")
+    val perfCntFence = addPerfCounter("fence")
 
     configNode.regmap(
       0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
       0x04 -> Seq(RegField.w(1, set_active)),
       0x08 -> Seq(RegField.r(2, state)),
       0x0C -> Seq(RegField.r(32, perfCntExecTime)),
-      0x10 -> Seq(RegField.r(32, perfCntMxWait)),
-      0x14 -> Seq(RegField.r(32, perfCntMxBusy)),
-      0x18 -> Seq(RegField.r(32, perfCntDMAWait)),
-      0x1C -> Seq(RegField.r(32, perfCntDMABusy)),
-      0x20 -> Seq(RegField.r(32, perfCntInstWait)),
-      0x24 -> Seq(RegField.r(32, perfCntInstBusy)),
-      0x28 -> Seq(RegField.r(32, perfCntRawInst)),
-      0x2C -> Seq(RegField.r(32, perfCntMxInst)),
-      0x30 -> Seq(RegField.r(32, perfCntDMAInst)),
-      0x34 -> Seq(RegField.r(32, perfCntFence))
+      0x10 -> Seq(RegField.r(32, perfCntMxBubble)),
+      0x14 -> Seq(RegField.r(32, perfCntMxActive)),
+      0x18 -> Seq(RegField.r(32, perfCntDMAActive)),
+      0x1C -> Seq(RegField.r(32, perfCntRawInst)),
+      0x20 -> Seq(RegField.r(32, perfCntMxInst)),
+      0x24 -> Seq(RegField.r(32, perfCntDMAInst)),
+      0x28 -> Seq(RegField.r(32, perfCntFence))
     )
 
     switch(state) {
@@ -86,26 +88,13 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
         }
       }
       is(s_active) {
-        when(firstInstFire) {
-          perfCntExecTime := perfCntExecTime + 1.U
-        }
         when(set_done) {
           state := s_done
         }
       }
       is(s_done) {
         when(set_active) {
-          perfCntExecTime := 0.U
-          perfCntMxWait := 0.U
-          perfCntMxBusy := 0.U
-          perfCntDMAWait := 0.U
-          perfCntDMABusy := 0.U
-          perfCntInstWait := 0.U
-          perfCntInstBusy := 0.U
-          perfCntRawInst := 0.U
-          perfCntMxInst := 0.U
-          perfCntDMAInst := 0.U
-          perfCntFence := 0.U
+          perfCounters.values.foreach(_ := 0.U) // reset all perf counters
           state := s_active
         }
       }
@@ -113,7 +102,7 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
 
 
     val decoder = Module(new Decoder(memAddrWidth))
-    val semaphores = Module(new Semaphores(nRead = 2, nWrite = 2))
+    val semaphores = Module(new Semaphores(nRead = 3, nWrite = 3))
     val dmaBeatBytes = memNode.out.head._2.slave.beatBytes
     val msaga = Module(new MSAGA(ev, dmaBeatBytes))
 
@@ -168,27 +157,25 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     val dmaSemAcquire = semaphores.io.acquire.last
     val dmaSemRelease = semaphores.io.release.last
 
-    dmaSemAcquire <> dma.module.io.semaphoreAcquire
-    dmaSemRelease <> dma.module.io.semaphoreRelease
+    semaphores.io.acquire.tail.zip(dma.module.io.semaphoreAcquire).foreach { case (acq, dmaAcq) =>
+      acq <> dmaAcq
+    }
+    semaphores.io.release.tail.zip(dma.module.io.semaphoreRelease).foreach { case (rel, dmaRel) =>
+      rel <> dmaRel
+    }
 
     when(state === s_active) {
-      when(mxInst.valid && !mxDepReady) {
-        perfCntMxWait := perfCntMxWait + 1.U
+      perfCntExecTime := perfCntExecTime + 1.U
+      when(firstInstFire) {
+        when(msaga.io.inst.ready && !msaga.io.inst.valid) {
+          perfCntMxBubble := perfCntMxBubble + 1.U
+        }
       }
       when(msaga.io.busy) {
-        perfCntMxBusy := perfCntMxBusy + 1.U
+        perfCntMxActive := perfCntMxActive + 1.U
       }
-      when(dmaInst.valid && !dma.module.io.busy) {
-        perfCntDMAWait := perfCntDMAWait + 1.U
-      }
-      when(dma.module.io.busy) {
-        perfCntDMABusy := perfCntDMABusy + 1.U
-      }
-      when(rawInstQueue.io.deq.valid && !rawInstQueue.io.deq.ready) {
-        perfCntInstBusy := perfCntInstBusy + 1.U
-      }
-      when(!rawInstQueue.io.deq.valid && rawInstQueue.io.deq.ready && firstInstFire) {
-        perfCntInstWait := perfCntInstWait + 1.U
+      when(dma.module.io.active) {
+        perfCntDMAActive := perfCntDMAActive + 1.U
       }
       when(rawInstQueue.io.deq.fire) {
         perfCntRawInst := perfCntRawInst + 1.U
@@ -205,12 +192,9 @@ class AXI4MSAGA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmet
     }
 
     when(RegNext(set_done, false.B)) {
-      printf("MSAGA: exec time %d, mx wait %d, mx busy %d, dma wait %d, dma busy %d, inst wait %d, inst busy %d\n",
-        perfCntExecTime,
-        perfCntMxWait, perfCntMxBusy,
-        perfCntDMAWait, perfCntDMABusy,
-        perfCntInstWait, perfCntInstBusy
-      )
+      for ((name, counter) <- perfCounters) {
+        printf(s"MSAGA: $name = %d\n", counter)
+      }
     }
 
 

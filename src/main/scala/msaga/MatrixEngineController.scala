@@ -229,7 +229,10 @@ class MatrixEngineController[E <: Data : Arithmetic, A <: Data : Arithmetic](
   Mux1HValidIO(fsm_io.map(_.acc_ctrl), io.acc_ctrl)
   Mux1HValidIO(fsm_io.map(_.sem_release), io.sem_release)
   io.pe_ctrl.zipWithIndex.foreach { case (out, idx) =>
-    Mux1HValidIO(fsm_io.map(_.pe_ctrl(idx)), out)
+    out.valid := Cat(fsm_io.map(_.pe_ctrl(idx).valid)).orR
+    out.bits := fsm_io.map(_.pe_ctrl(idx).bits.asUInt).reduce(_ | _).asTypeOf(out.bits)
+    // different control signals should not conflict
+    DelayedAssert(!out.valid || fsm_io.map(_.pe_ctrl(idx).bits.asUInt).reduce(_ & _) === 0.U)
   }
 
   val enq_ptr = RegInit(0.U(1.W))

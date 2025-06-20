@@ -262,7 +262,7 @@ class DMAInstruction(Instruction):
 
 class Semaphore:
     def __init__(self, id: int, n: int):
-        assert 0 < id < 32 and 0 < n < 8
+        assert 0 <= id < 32 and 0 < n < 8
         self.id = id
         self.n = n
         self.value = 0

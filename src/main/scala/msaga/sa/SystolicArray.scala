@@ -45,7 +45,8 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
   // left -> right
   cmp_array.foldLeft(io.cmp_ctrl){ (ctrl, cmp) =>
     cmp.io.in_ctrl := ctrl
-    pipe_no_reset(cmp.io.out_ctrl)
+    // cmp unit is stateful, need explicit reset
+    Pipe(cmp.io.out_ctrl)
   }
   for ((row, in_ctrl) <- mesh.zip(io.pe_ctrl)) {
     row.foldLeft(in_ctrl) { (ctrl, pe) => {

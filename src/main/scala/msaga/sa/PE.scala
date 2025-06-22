@@ -48,9 +48,11 @@ class PE[E <: Data : Arithmetic, A <: Data : Arithmetic]
 
   val reg = Reg(elemType)
   val ctrl = io.in_ctrl.bits
+  // TODO: this is actually useless, ctrl signals does not depend on fire
   val fire = io.in_ctrl.fire
 
-  val exp2Done = RegInit(false.B)
+  // as long as exp2 is not the first operation, exp2Done does not need to be reset
+  val exp2Done = Reg(Bool())
   when(fire) {
     when(ctrl.exp2) {
       exp2Done := exp2Done || macUnit.io.out_exp2

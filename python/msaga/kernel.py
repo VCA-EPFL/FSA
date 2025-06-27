@@ -67,11 +67,21 @@ def fence(mx: bool, dma: bool, stop: bool) -> None:
 def dma(func: int, mem: MTile, tile: ATile | STile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
     assert mem.shape == tile.shape and len(mem.shape) == 2 and mem.dtype == tile.dtype
     rows, cols = mem.shape
-    mem = DMAInstrucionMem(mem.data_ptr, mem.stride[-2] * mem.dtype.itemsize, cols * mem.dtype.itemsize)
+    mem_full_stride = mem.stride[-2] * mem.dtype.itemsize
+    # check width
+    inst_full_stride = InstructionField(mem_full_stride, 6 + 15 - 1, 0, signed=True)
+    # split full stride into two parts
+    # high 6 bits of full stride
+    stride_1 = (inst_full_stride.value >> 15) & ((1 << 6) - 1)
+    # low 15 bits of full stride
+    stride_2 = inst_full_stride.value & ((1 << 15) - 1)
+
+    mem = DMAInstrucionMem(mem.data_ptr, stride_2, cols * mem.dtype.itemsize)
     sram = DMAInstrucionSRAM(
         __g_kernel_ctx.tile_row_addr(tile),
         __g_kernel_ctx.tile_stride(tile),
-        isAccum=isinstance(tile, ATile)
+        isAccum=isinstance(tile, ATile),
+        mem_stride_1=stride_1
     )
     if sem is None:
         aq, rl = False, False

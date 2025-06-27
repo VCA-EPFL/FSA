@@ -53,7 +53,9 @@ object ISA {
     val DMA_SIZE_BITS = 10
     val DMA_REPEAT_BITS = 9
     val MEM_MAX_ADDR_BITS = 39
-    val MEM_STRIDE_BITS = 15
+    val MEM_STRIDE_1_BITS = 6
+    val MEM_STRIDE_2_BITS = 15
+    val MEM_STRIDE_BITS = MEM_STRIDE_1_BITS + MEM_STRIDE_2_BITS
   }
 
   object InstTypes {

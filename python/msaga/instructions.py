@@ -213,6 +213,7 @@ class DMAInstrucionSRAM(InstructionLike):
     addr: int
     stride: int
     isAccum: bool
+    mem_stride_1: int
 
     @property
     def bits(self) -> int:
@@ -220,20 +221,21 @@ class DMAInstrucionSRAM(InstructionLike):
             InstructionField(self.addr, 31, 12),
             InstructionField(self.stride, 11, 7, signed=True),
             InstructionField(self.isAccum, 6, 6),
+            InstructionField(self.mem_stride_1, 5, 0)
         ))
 
 
 @dataclass
 class DMAInstrucionMem(InstructionLike):
     addr: int
-    stride: int
+    stride_2: int
     size: int
 
     @property
     def bits(self) -> int:
         return InstructionLike.combine_fields((
             InstructionField(self.addr, 63, 25),
-            InstructionField(self.stride, 24, 10, signed=True),
+            InstructionField(self.stride_2, 24, 10),
             InstructionField(self.size, 9, 0)
         ))
 

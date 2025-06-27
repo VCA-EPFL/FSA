@@ -36,7 +36,7 @@ class DMAImpl(outer: DMA) extends LazyModuleImp(outer) {
   val dmaReq = Wire(Decoupled(new DMARequest(sramAddrWidth, memAddrWidth)))
   dmaReq.valid := io.inst.valid
   dmaReq.bits.memAddr := io.inst.bits.mem.addr
-  dmaReq.bits.memStride := io.inst.bits.mem.stride
+  dmaReq.bits.memStride := io.inst.bits.getStride
   dmaReq.bits.sramAddr := io.inst.bits.sram.addr
   dmaReq.bits.sramStride := io.inst.bits.sram.stride
   dmaReq.bits.repeat := io.inst.bits.header.repeat

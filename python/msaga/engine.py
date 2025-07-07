@@ -20,7 +20,8 @@ class VerilatorSimulator(BaseEngine):
                 output_dir: str = '/tmp', max_cycles: int = 10000000, verbose=True,
                 dram_sim: bool=False,
                 vcdfile: Optional[str]=None,
-                dram_sim_ini_dir: Optional[str]=None
+                dram_sim_ini_dir: Optional[str]=None,
+                numactl_cmd: str = None,
                 ):
         super().__init__()
         assert os.path.isfile(simulator_path)
@@ -31,6 +32,7 @@ class VerilatorSimulator(BaseEngine):
         self.verbose = verbose
         self.dram_sim = dram_sim
         self.vcdfile = vcdfile
+        self.numactl_cmd = numactl_cmd
         if dram_sim_ini_dir:
             self.dram_sim_ini_dir = dram_sim_ini_dir
             assert os.path.isdir(dram_sim_ini_dir)
@@ -65,6 +67,8 @@ class VerilatorSimulator(BaseEngine):
         mem_file = os.path.join(self.output_dir, 'mem.elf')
         self.dump_mem_elf(mem_file, kernel.input)
         sim_cmd = [self.simulator_path, inst_file]
+        if self.numactl_cmd:
+            sim_cmd = self.numactl_cmd.split() + [self.simulator_path, inst_file]
         if self.dram_sim:
             sim_cmd.append('+dramsim')
             sim_cmd.append(f'+dramsim_ini_dir={self.dram_sim_ini_dir}')

@@ -142,11 +142,14 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='SmallMSAGAConfig', help='Chisel generation config')
     parser.add_argument('--engine', type=str, default='Verilator', choices=['Verilator', 'FPGA'])
     parser.add_argument('--build_dir', type=str, default=None)
+    parser.add_argument('--output_dir', type=str, default='/tmp', help='Output directory')
     parser.add_argument('--diff', action='store_true', help='Compare result with PyEasyFloat')
     parser.add_argument('--diff_verbose', action='store_true', help='Enable verbose mode for PyEasyFloat')
     parser.add_argument('--diff_only', action='store_true', help='Only run PyEasyFloat, skip real hardware execution')
     parser.add_argument('--simulator_bin', type=str, default=None, help='[VerilatorOnly] Path to the simulator binary')
     parser.add_argument('--vcdfile', type=str, default=None, help='[VerilatorOnly] Path to the VCD file')
+    parser.add_argument('--numactl', type=str, default=None, help='[VerilatorOnly] Command to run the simulator with NUMA control')
+    parser.add_argument('--max_cycles', type=int, default=0, help='[VerilatorOnly] Maximum number of cycles to run the simulation')
     args = parser.parse_args()
 
     if args.build_dir is None:
@@ -173,15 +176,14 @@ if __name__ == "__main__":
             print(f"Using simulator binary: {simulator_bin}")
         else:
             raise FileNotFoundError(f"Simulator binary not found: {simulator_bin}")
-        if args.vcdfile is not None:
-            engine = M.VerilatorSimulator(
-                simulator_bin,
-                vcdfile=args.vcdfile
-            )
-        else:
-            engine = M.VerilatorSimulator(
-                simulator_bin
-            )
+
+        engine = M.VerilatorSimulator(
+            simulator_bin,
+            vcdfile=args.vcdfile,
+            output_dir=args.output_dir,
+            max_cycles=args.max_cycles,
+            numactl_cmd=args.numactl
+        )
     else:
         assert f"{args.engine} is not supported yet."
 

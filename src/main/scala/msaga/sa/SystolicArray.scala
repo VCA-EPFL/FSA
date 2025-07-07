@@ -18,10 +18,6 @@ class SystolicArray[E <: Data : Arithmetic, A <: Data : Arithmetic]
     val acc_out = Output(Vec(cols, Valid(ev.accType)))
   })
 
-  val debug_counter = RegInit(0.U(32.W))
-  debug_counter := debug_counter + 1.U
-  dontTouch(debug_counter)
-
   /*
       CMP[0]  -> CMP[1]  -> ... -> CMP[col-1]
        |          |                 |

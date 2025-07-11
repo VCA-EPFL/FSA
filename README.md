@@ -26,10 +26,16 @@ cd chipyard-fsa
 
 ## Run RTL Simulation
 
-### 1. Generate the Verilator simulator binary:
+### 1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```bash
-cd chipyard-fsa
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 2. Generate the Verilator simulator binary:
+
+```bash
+cd chipyard-fsa/sims/verilator
 # Generate a 4x4 Fp16-mul-Fp32-acc systolic array
 make CONFIG=FSA4X4Fp16Config
 ```
@@ -37,16 +43,12 @@ make CONFIG=FSA4X4Fp16Config
 See `generators/chipyard/src/main/scala/config/FSAConfig.scala` for more available configurations.
 
 
-### 2. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/):
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
 ### 3. Run FlashAttention using the FSA Python API:
 
 ```bash
-cd generators/fsa/python
+cd chipyard-fsa/generators/fsa/python
 uv run main.py --seq_q 4 --seq_kv 4 --config FSA4X4Fp16Config
 ```
 
@@ -59,7 +61,7 @@ A Python software library also serves as a *golden reference*, allowing value-by
 To enable detailed error checking, use:
 
 ```bash
-cd generators/fsa/python
+cd chipyard-fsa/generators/fsa/python
 uv run main.py --seq_q 4 --seq_kv 4 --config FSA4X4Fp16Config --diff --diff_verbose
 ```
 

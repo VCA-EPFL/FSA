@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import msaga as M
 import argparse
-from unit_test.data import *
+from fa_ref import *
 from msaga.tensor import MTile, ATile, STile
 
 @M.kernel

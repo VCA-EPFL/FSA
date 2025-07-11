@@ -1,47 +1,47 @@
 import os
 import torch
 import numpy as np
-import msaga as M
+import fsa as F
 import argparse
 from fa_ref import *
-from msaga.tensor import MTile, ATile, STile
+from fsa.tensor import MTile, ATile, STile
 
-@M.kernel
+@F.kernel
 def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: int) -> MTile:
     assert (len(Q.shape), len(K.shape), len(V_t.shape)) == (2, 2, 2)
     seq_q, d = Q.shape
     seq_k, dk = K.shape
     dv, seq_v = V_t.shape
     assert d == dk and d == dv and seq_k == seq_v
-    assert bc == d, "MSAGA requires bc == d"
+    assert bc == d, "FSA requires bc == d"
 
-    O_t: MTile = M.alloc_mem((d, seq_q), M.fp32)
+    O_t: MTile = F.alloc_mem((d, seq_q), F.fp32)
     Q_BLOCKS = Q.split(br, dim=-2) # [br, d]
     K_BLOCKS = K.split(bc, dim=-2) # [bc, d]
     V_t_BLOCKS = V_t.split(bc, dim=-1) # [d, bc]
     O_t_BLOCKS = O_t.split(br, dim=-1) # [d, br]
 
     # [Br, d]
-    Q_tiles = [M.alloc_spad((br, d)) for _ in range(2)]
+    Q_tiles = [F.alloc_spad((br, d)) for _ in range(2)]
     # log exp sum [Br, 1]
-    L_tile = M.alloc_accumulator((1, br))
+    L_tile = F.alloc_accumulator((1, br))
     # [d, Br]
-    O_t_tile = M.alloc_accumulator((d, br))
+    O_t_tile = F.alloc_accumulator((d, br))
 
     # double-buffer KV
-    K_tiles = [M.alloc_spad((bc, d)) for _ in range(2)]
-    V_t_tiles = [M.alloc_spad((d, bc)) for _ in range(2)]
+    K_tiles = [F.alloc_spad((bc, d)) for _ in range(2)]
+    V_t_tiles = [F.alloc_spad((d, bc)) for _ in range(2)]
 
-    sem_q_lst = [M.Semaphore(id=0, n=2), M.Semaphore(id=1, n=2)]
-    sem_k_lst = [M.Semaphore(id=2, n=2), M.Semaphore(id=3, n=2)]
-    sem_v_lst = [M.Semaphore(id=4, n=2), M.Semaphore(id=5, n=2)]
-    sem_o = M.Semaphore(id=6, n=2)
+    sem_q_lst = [F.Semaphore(id=0, n=2), F.Semaphore(id=1, n=2)]
+    sem_k_lst = [F.Semaphore(id=2, n=2), F.Semaphore(id=3, n=2)]
+    sem_v_lst = [F.Semaphore(id=4, n=2), F.Semaphore(id=5, n=2)]
+    sem_o = F.Semaphore(id=6, n=2)
 
     for i, Q_i in enumerate(Q_BLOCKS):
         Q_tile = Q_tiles[i % 2]
         sem_q = sem_q_lst[i % 2]
         Q_tile_rev = Q_tile.reverse(dim=0)
-        M.load_tile(Q_i, Q_tile, sem_q)
+        F.load_tile(Q_i, Q_tile, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
             is_first_iter = j == 0
             is_last_iter = j == len(K_BLOCKS) - 1
@@ -49,18 +49,18 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
             K_tile, V_t_tile = K_tiles[buffer], V_t_tiles[buffer]
             sem_k, sem_v = sem_k_lst[buffer], sem_v_lst[buffer]
 
-            M.mx_load_stationary(Q_tile_rev, sem_q, aq=is_first_iter, rl=is_last_iter)
+            F.mx_load_stationary(Q_tile_rev, sem_q, aq=is_first_iter, rl=is_last_iter)
 
-            M.load_tile(K_j, K_tile, sem_k)
-            M.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k)
+            F.load_tile(K_j, K_tile, sem_k)
+            F.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k)
 
-            M.load_tile(V_t_j, V_t_tile, sem_v)
-            M.mx_attn_value(V_t_tile, O_t_tile, not is_first_iter, sem_v)
+            F.load_tile(V_t_j, V_t_tile, sem_v)
+            F.mx_attn_value(V_t_tile, O_t_tile, not is_first_iter, sem_v)
         # end inner loop
-        M.mx_reciprocal(L_tile, None)
-        M.mx_attn_lse_norm(O_t_tile, sem_o, aq=False, rl=True)
-        M.store_tile(O_t_tile, O_t_BLOCKS[i], sem_o)
-    M.fence(mx=True, dma=True, stop=True)
+        F.mx_reciprocal(L_tile, None)
+        F.mx_attn_lse_norm(O_t_tile, sem_o, aq=False, rl=True)
+        F.store_tile(O_t_tile, O_t_BLOCKS[i], sem_o)
+    F.fence(mx=True, dma=True, stop=True)
     return O_t
 
 def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int, verbose: bool) -> np.ndarray:
@@ -102,7 +102,7 @@ def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarra
 
 def main(
         seq_q: int, seq_kv: int, d: int, br: int, bc: int,
-        engine: M.engine.BaseEngine,
+        engine: F.engine.BaseEngine,
         diff_easyfloat: bool = False,
         easyfloat_verbose: bool = False
     ):
@@ -113,12 +113,12 @@ def main(
 
     impls = {}
     if engine:
-        Q = M.from_numpy(Q_np)
-        K = M.from_numpy(K_np)
-        V_t = M.from_numpy(V_np.T)
+        Q = F.from_numpy(Q_np)
+        K = F.from_numpy(K_np)
+        V_t = F.from_numpy(V_np.T)
         O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc))
-        O = M.to_numpy(O_t).T
-        impls['MSAGA'] = O
+        O = F.to_numpy(O_t).T
+        impls['FSA'] = O
 
     if diff_easyfloat:
         print("Comparing with PyEasyFloat...")
@@ -130,7 +130,7 @@ def main(
     print("Comparing with Torch...")
     O_torch = ref_torch(Q_np, K_np, V_np)
 
-    M.compare_matrices(
+    F.compare_matrices(
         ('torch', O_torch),
         impls
     )
@@ -177,7 +177,7 @@ if __name__ == "__main__":
         else:
             raise FileNotFoundError(f"Simulator binary not found: {simulator_bin}")
 
-        engine = M.VerilatorSimulator(
+        engine = F.VerilatorSimulator(
             simulator_bin,
             vcdfile=args.vcdfile,
             output_dir=args.output_dir,
@@ -192,8 +192,8 @@ if __name__ == "__main__":
         print(f"Warning: Config file not found: {config_file}. Using default MSAGA config.")
     else:
         print(f"Loading config from: {config_file}")
-        M.init(config_file)
-        cfg = M.get_config()
+        F.init(config_file)
+        cfg = F.get_config()
 
     main(
         args.seq_q, args.seq_kv,

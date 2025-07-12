@@ -51,7 +51,7 @@ void fsa_tsi_t::load_instructions(const std::string& path) {
     size_t filesize = sb.st_size;
     if (filesize % sizeof(uint32_t) != 0) {
         throw std::runtime_error(
-            "MSAGA instruction file size must be a multiple of 4! size: " + filesize
+            "FSA instruction file size must be a multiple of 4! size: " + filesize
         );
     }
     // Memory-map the file

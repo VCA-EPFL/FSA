@@ -139,7 +139,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seq_q', type=int, default=4, help='Sequence length for query')
     parser.add_argument('--seq_kv', type=int, default=4, help='Sequence length for key/value')
-    parser.add_argument('--config', type=str, default='SmallMSAGAConfig', help='Chisel generation config')
+    parser.add_argument('--config', type=str, default='FSA4X4Fp16Config', help='Chisel generation config')
     parser.add_argument('--engine', type=str, default='Verilator', choices=['Verilator', 'FPGA'])
     parser.add_argument('--build_dir', type=str, default=None)
     parser.add_argument('--output_dir', type=str, default='/tmp', help='Output directory')
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     long_name = 'chipyard.harness.TestHarness.' + args.config
     config_file = os.path.join(
         build_dir, 'generated-src', long_name,
-        long_name + '.MSAGAConfig.json'
+        long_name + '.FSAConfig.json'
     )
 
     if args.diff_only:
@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
 
     if not os.path.isfile(config_file):
-        print(f"Warning: Config file not found: {config_file}. Using default MSAGA config.")
+        print(f"Warning: Config file not found: {config_file}. Using default FSA config.")
     else:
         print(f"Loading config from: {config_file}")
         F.init(config_file)

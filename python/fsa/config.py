@@ -3,7 +3,7 @@ from .mem import CompoundMemoryManger
 import json
 
 @dataclass(frozen=True)
-class MSAGAConfig:
+class FSAConfig:
     sa_rows: int = 4
     sa_cols: int = 4
     inst_queue_size: int = 256
@@ -18,21 +18,21 @@ class MSAGAConfig:
     acc_size: int = 0x1000
 
 @dataclass(frozen=True)
-class MSAGAGlobalVariables:
-    config: MSAGAConfig
+class FSAGlobalVariables:
+    config: FSAConfig
     mem_manager: CompoundMemoryManger
 
-__global_vars: MSAGAGlobalVariables = None
+__global_vars: FSAGlobalVariables = None
 
 def init(config_file: str):
     global __global_vars
-    assert __global_vars is None, "MSAGA is already initialized."
+    assert __global_vars is None, "FSA is already initialized."
 
     with open(config_file, 'r') as f:
         cfg = json.load(f)
     cfg["e_type"] = eval(cfg["e_type"])
     cfg["a_type"] = eval(cfg["a_type"])
-    config = MSAGAConfig(**cfg)
+    config = FSAConfig(**cfg)
     mem_manger = CompoundMemoryManger(
         mem_base=config.mem_base,
         mem_size=config.mem_size,
@@ -48,15 +48,15 @@ def init(config_file: str):
         acc_align=config.sa_cols * config.a_type.itemsize,
         acc_dtype=config.a_type
     )
-    __global_vars = MSAGAGlobalVariables(config, mem_manger)
+    __global_vars = FSAGlobalVariables(config, mem_manger)
 
 def require_initialized():
     global __global_vars
     if __global_vars is None:
-        raise RuntimeError("MSAGA is not initialized. Call init() with a config file before using MSAGA.")
+        raise RuntimeError("FSA is not initialized. Call init() with a config file before using FSA.")
     return __global_vars
 
-def get_config() -> MSAGAConfig:
+def get_config() -> FSAConfig:
     require_initialized()
     return __global_vars.config
 

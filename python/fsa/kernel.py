@@ -43,7 +43,7 @@ def kernel(func):
         __g_kernel_ctx = KernelContext()
         ret = func(*args, **kwargs)
         assert (ret is None) or (isinstance(ret, MTile)) or (isinstance(ret, list)), \
-            "the return type of MSAGA kernel function can only be one of MTile, list[MTile] or None"
+            "the return type of FSA kernel function can only be one of MTile, list[MTile] or None"
         kernel = Kernel(
             __g_kernel_ctx.instructions,
             get_mem_manager().mem_tensor_list,
@@ -55,7 +55,7 @@ def kernel(func):
 
 def check_kernel_ctx(func):
     def wrapper(*args, **kwargs):
-        assert __g_kernel_ctx is not None, f"{func.__name__} can only be called within a MSAGA kernel!"
+        assert __g_kernel_ctx is not None, f"{func.__name__} can only be called within a FSA kernel!"
         func(*args, **kwargs)
     return wrapper
 

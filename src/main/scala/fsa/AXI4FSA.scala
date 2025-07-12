@@ -190,7 +190,7 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
 
     when(RegNext(set_done, false.B)) {
       for ((name, counter) <- perfCounters) {
-        printf(s"MSAGA: $name = %d\n", counter)
+        printf(s"FSA: $name = %d\n", counter)
       }
     }
 
@@ -214,7 +214,7 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
     """.stripMargin
 
     ElaborationArtefacts.add(
-      "MSAGAConfig.json",
+      "FSAConfig.json",
       configJSON
     )
   }

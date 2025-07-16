@@ -8,6 +8,8 @@ Enjoy computing non-matrix-multiplication operations using matrix-multiplication
 
 ![Inner loop animation](docs/innerloop.gif)
 
+Please check the [paper](http://arxiv.org/abs/2507.11331) for more details.
+
 ---
 
 ## 🚀 Setup

@@ -9,6 +9,8 @@ from .tensor import MTile
 from .utils import ElfWriter
 from .config import get_config
 from .dtype import to_numpy_dtype
+from .xdma import dev_read, dev_write
+from .xdma_mmio import MMIO
 
 class BaseEngine(ABC):
     @abstractmethod
@@ -97,3 +99,101 @@ class VerilatorSimulator(BaseEngine):
             out.data = arr.tobytes(order='C')
         return kernel.output
 
+class FPGA(BaseEngine):
+    def __init__(self, control_dev: str = "/dev/xdma0_user", mem_read_dev: str = "/dev/xdma0_c2h_0", mem_write_dev: str = "/dev/xdma0_h2c_0"):
+        super().__init__()
+        self.control_dev = control_dev
+        self.mem_read_dev = mem_read_dev
+        self.mem_write_dev = mem_write_dev
+        self.INST_QUEUE_OFFSET = 0x0 # offset for instruction queue register
+        self.SET_ACTIVE_OFFSET = 0x4  # offset for setting active state
+        self.STATE_OFFSET = 0x8  # offset for device state register
+        self.PERF_EXEC_TIME = 0xc
+        self.PERF_MX_BUBBLE = 0x10
+        self.PERF_MX_ACTIVE = 0x14
+        self.PERF_DMA_ACTIVE = 0x18
+        self.PERF_RAW_INST = 0x1c
+        self.PERF_MX_INST = 0x20
+        self.PERF_DMA_INST = 0x24
+        self.PERF_FENCE_INST = 0x28
+        self.PERF_ENQ_INST = 0x2c
+        self.PERF_DEQ_INST = 0x30
+        self.MMIO = MMIO(control_dev)
+    def execute(self, kernel: Kernel) -> None | MTile | list[MTile]:
+        output_tensors = kernel.output
+        output_tensors = [output_tensors]
+        for tensor in output_tensors:
+            if tensor.size > 0:
+                print(f"Reading back output tensor from addr {hex(tensor.data_ptr)}, size {tensor.size}")
+                data = dev_read(self.mem_read_dev, tensor.data_ptr, tensor.size)
+                data.tofile("/tmp/debug-fpga{hex(tensor.data_ptr)}.bin")
+
+
+
+        ui32_lst = [elem for inst in kernel.instructions for elem in inst.to_ui32_list()]
+
+        input_tensors = kernel.input
+
+        # write to memory
+        if isinstance(input_tensors, MTile):
+            input_tensors = [input_tensors]
+        elif not isinstance(input_tensors, list):
+            raise TypeError("input_tensors must be a MTile or a list of MTiles")
+        for tensor in input_tensors:
+            if tensor.data is not None:
+                # tensor to numpy array
+                numpy_array = np.frombuffer(tensor.data, dtype=to_numpy_dtype(tensor.dtype))
+                dev_write(self.mem_write_dev, tensor.data_ptr, numpy_array)
+                numpy_array.tofile(f"/tmp/{hex(tensor.data_ptr)}")
+        
+        # make sure device in idle state
+        state = self.MMIO.dev_mmio_read(self.STATE_OFFSET)
+
+        if state != 0:
+            raise RuntimeError(f"Device is not idle, current state: {state}")
+        
+        # activate device
+        self.MMIO.dev_mmio_write(self.SET_ACTIVE_OFFSET, 0xffffffff)
+
+        # make sure device is active
+        state = self.MMIO.dev_mmio_read(addr = self.STATE_OFFSET)
+        if state != 1:
+            raise RuntimeError(f"Device is not active, current state: {state}")
+
+        # write instructions to control device
+        inst_bytes = struct.pack(f'{len(ui32_lst)}I', *ui32_lst)
+        self.MMIO.dev_queue_mmio_write(self.INST_QUEUE_OFFSET, ui32_lst)
+
+        # wait for device to finish
+        cycles = 0
+        while True:
+            state = self.MMIO.dev_mmio_read(self.STATE_OFFSET)
+            if state == 2:
+                print("Device finished execution")
+                print("Performance counters:")
+                print(f"Execution time: {self.MMIO.dev_mmio_read(self.PERF_EXEC_TIME)} cycles")
+                print(f"Max bubble cycles: {self.MMIO.dev_mmio_read(self.PERF_MX_BUBBLE)} cycles")
+                print(f"Max active cycles: {self.MMIO.dev_mmio_read(self.PERF_MX_ACTIVE)} cycles")
+                print(f"DMA active cycles: {self.MMIO.dev_mmio_read(self.PERF_DMA_ACTIVE)} cycles")
+                print(f"Raw instructions: {self.MMIO.dev_mmio_read(self.PERF_RAW_INST)}")
+                print(f"Max instructions: {self.MMIO.dev_mmio_read(self.PERF_MX_INST)}")
+                print(f"DMA instructions: {self.MMIO.dev_mmio_read(self.PERF_DMA_INST)}")
+                print(f"Fence instructions: {self.MMIO.dev_mmio_read(self.PERF_FENCE_INST)}")
+                print(f"Enqueue instructions: {self.MMIO.dev_mmio_read(self.PERF_ENQ_INST)}")
+                print(f"Dequeue instructions: {self.MMIO.dev_mmio_read(self.PERF_DEQ_INST)}")
+                break
+        # read back output tensors
+        output_tensors = kernel.output
+        if isinstance(output_tensors, MTile):
+            output_tensors = [output_tensors]
+        elif not isinstance(output_tensors, list):
+            output_tensors = []
+
+        for tensor in output_tensors:
+            if tensor.size > 0:
+                print(f"Reading back output tensor from addr {hex(tensor.data_ptr)}, size {tensor.size}")
+                data = dev_read(self.mem_read_dev, tensor.data_ptr, tensor.size)
+                data.tofile("/tmp/debug-fpga.bin")
+                tensor.data = data
+
+        return kernel.output

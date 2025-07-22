@@ -2,7 +2,7 @@ import numpy as np
 from .dtype import *
 from .kernel import *
 from .tensor import STile, ATile, MTile
-from .engine import VerilatorSimulator
+from .engine import VerilatorSimulator, FPGA
 from .instructions import Semaphore
 from .config import init, get_config, get_mem_manager
 from .utils import *

@@ -4,8 +4,8 @@ import json
 
 @dataclass(frozen=True)
 class FSAConfig:
-    sa_rows: int = 4
-    sa_cols: int = 4
+    sa_rows: int = 16
+    sa_cols: int = 16
     inst_queue_size: int = 256
     e_type: dtype = fp16
     a_type: dtype = fp32

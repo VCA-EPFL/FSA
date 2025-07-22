@@ -65,7 +65,9 @@ def fence(mx: bool, dma: bool, stop: bool) -> None:
 
 @check_kernel_ctx
 def dma(func: int, mem: MTile, tile: ATile | STile, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
-    assert mem.shape == tile.shape and len(mem.shape) == 2 and mem.dtype == tile.dtype
+    assert mem.shape == tile.shape
+    assert len(mem.shape) == 2
+    assert mem.dtype == tile.dtype
     rows, cols = mem.shape
     mem_full_stride = mem.stride[-2] * mem.dtype.itemsize
     # check width

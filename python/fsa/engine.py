@@ -120,16 +120,6 @@ class FPGA(BaseEngine):
         self.PERF_DEQ_INST = 0x30
         self.MMIO = MMIO(control_dev)
     def execute(self, kernel: Kernel) -> None | MTile | list[MTile]:
-        output_tensors = kernel.output
-        output_tensors = [output_tensors]
-        for tensor in output_tensors:
-            if tensor.size > 0:
-                print(f"Reading back output tensor from addr {hex(tensor.data_ptr)}, size {tensor.size}")
-                data = dev_read(self.mem_read_dev, tensor.data_ptr, tensor.size)
-                data.tofile("/tmp/debug-fpga{hex(tensor.data_ptr)}.bin")
-
-
-
         ui32_lst = [elem for inst in kernel.instructions for elem in inst.to_ui32_list()]
 
         input_tensors = kernel.input

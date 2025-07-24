@@ -87,6 +87,31 @@ Error of PyEasyFloat vs torch: {'MAE': np.float32(9.6587464e-05), 'MSE': np.floa
 
 ---
 
+## FSA Architecture
+![microarch](./docs/microarch.jpg)
+
+The RTL implementation is located under the [src](./src/) folder.
+The top module is [AXI4FSA.scala](./src/main/scala/fsa/AXI4FSA.scala).
+The hardware behavior of FSA instructions is described
+in [ExecutionPlan.scala](./src/main/scala/fsa/ExecutionPlan.scala),
+and the control logic is generated automatically accordingly.
+
+### Integration Options
+
+We provide two options to integrate FSA into Chipyard:
+
+1. **TileLink Integration**: Connect FSA AXI4 memory channels to Chipyard's TileLink MBus.
+   This should be used if FSA shares the backing memory with other
+   Chipyard components. The corresponding configs are named
+   `FSAMxNConfig` in [`FSAConfig.scala`](https://github.com/VCA-EPFL/chipyard-fsa/blob/msaga-main/generators/chipyard/src/main/scala/config/FSAConfig.scala).
+
+2. **Direct AXI4 Integration**: Connect FSA AXI4 memory channels to the backing memory (e.g., DRAMSim, HBM)
+   directly without converting AXI4 to TileLink.
+   This is recommended if FSA does not need to share the MBus.
+   The corresponding configs are named
+   `AXI4FSAMxNConfig` in [`FSAConfig.scala`](https://github.com/VCA-EPFL/chipyard-fsa/blob/msaga-main/generators/chipyard/src/main/scala/config/FSAConfig.scala).
+
+
 ## FPGA Support
 
 Support for **Xilinx U55C** is coming soon!

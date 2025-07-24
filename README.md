@@ -116,6 +116,8 @@ We provide two options to integrate FSA into Chipyard:
 
 [AMD U55C FPGA board](https://www.amd.com/en/products/accelerators/alveo/u55c/a-u55c-p00g-pq-g.html) is supported by this project. 
 
+![FPGA arch](./docs/fpga.jpg)
+
 ### 1. FPGA bit generation
 
 Make sure [Vivado](https://www.amd.com/en/products/software/adaptive-socs-and-fpgas/vivado.html) is installed and run the following commands:
@@ -168,7 +170,3 @@ Error of FSA vs torch: {'MAE': np.float32(9.4124e-05), 'MSE': np.float32(1.31562
 ```
 
 For another test run, restart from step 2 to reset the FPGA system.
-
-### FPGA project architecture
-
-![FPGA arch](./docs/fpga.png)

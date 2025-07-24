@@ -18,20 +18,20 @@ import freechips.rocketchip.subsystem.ExtMem
 class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: ArithmeticImpl[E, A])(implicit p: Parameters) extends LazyModule {
   val instBeatBytes = 4
   val instBeatBits = instBeatBytes * 8
-  val msagaParams = p(FSA).get
+  val fsaParams = p(FSA).get
 
   val configNode = AXI4RegisterNode(
     address = AddressSet(0x8000, 0xff)
   )
   val dma = LazyModule(new DMA(
-    nPorts = msagaParams.nMemPorts,
-    sramAddrWidth = msagaParams.sramAddrWidth,
-    dmaLoadInflight = msagaParams.dmaLoadInflight,
-    dmaStoreInflight = msagaParams.dmaStoreInflight,
+    nPorts = fsaParams.nMemPorts,
+    sramAddrWidth = fsaParams.sramAddrWidth,
+    dmaLoadInflight = fsaParams.dmaLoadInflight,
+    dmaStoreInflight = fsaParams.dmaStoreInflight,
     spadElemWidth = ev.elemType.getWidth,
-    spadRowSize = msagaParams.saRows,
+    spadRowSize = fsaParams.saRows,
     accElemWidth = ev.accType.getWidth,
-    accRowSize = msagaParams.saCols
+    accRowSize = fsaParams.saCols
   ))
   val memNode = dma.node
 
@@ -44,10 +44,20 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
     val set_active = WireInit(false.B)
     val set_done = Wire(Bool())
     val rawInstQueue = Module(
-      new Queue(UInt(instBeatBits.W), msagaParams.instructionQueueEntries, useSyncReadMem = true)
+      new Queue(UInt(instBeatBits.W), fsaParams.instructionQueueEntries, useSyncReadMem = false)
     )
 
     val firstInstFire = RegInit(false.B)
+
+    val enqInstCnt = RegInit(0.U(32.W))
+    val deqInstCnt = RegInit(0.U(32.W))
+
+    when(rawInstQueue.io.enq.fire) {
+      enqInstCnt := enqInstCnt + 1.U
+    }
+    when(rawInstQueue.io.deq.fire) {
+      deqInstCnt := deqInstCnt + 1.U
+    }
 
     val perfCounters = scala.collection.mutable.TreeMap[String, UInt]()
 
@@ -69,8 +79,8 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
 
     configNode.regmap(
       0x00 -> Seq(RegField.w(instBeatBits, rawInstQueue.io.enq)),
-      0x04 -> Seq(RegField.w(1, set_active)),
-      0x08 -> Seq(RegField.r(2, state)),
+      0x04 -> Seq(RegField.w(32, set_active)),
+      0x08 -> Seq(RegField.r(32, state)),
       0x0C -> Seq(RegField.r(32, perfCntExecTime)),
       0x10 -> Seq(RegField.r(32, perfCntMxBubble)),
       0x14 -> Seq(RegField.r(32, perfCntMxActive)),
@@ -78,7 +88,9 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
       0x1C -> Seq(RegField.r(32, perfCntRawInst)),
       0x20 -> Seq(RegField.r(32, perfCntMxInst)),
       0x24 -> Seq(RegField.r(32, perfCntDMAInst)),
-      0x28 -> Seq(RegField.r(32, perfCntFence))
+      0x28 -> Seq(RegField.r(32, perfCntFence)),
+      0x2c -> Seq(RegField.r(32, enqInstCnt)),
+      0x30 -> Seq(RegField.r(32, deqInstCnt)),
     )
 
     switch(state) {
@@ -117,7 +129,7 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
     decoder.io.in.bits := rawInstQueue.io.deq.bits
     rawInstQueue.io.deq.ready := decoder.io.in.ready && is_active
 
-    val mxInst = Queue(decoder.io.outMx, entries = msagaParams.mxInflight, pipe = true)
+    val mxInst = Queue(decoder.io.outMx, entries = fsaParams.mxInflight, pipe = true)
     // DMA has its own load/store queues inside it
     val dmaInst = Queue(decoder.io.outDMA, pipe = true)
 
@@ -198,18 +210,18 @@ class AXI4FSA[E <: Data : Arithmetic, A <: Data : Arithmetic](val ev: Arithmetic
     val memParams = p(AXI4DirectMemPortKey).getOrElse(p(ExtMem).get)
     val configJSON = f"""
     |{
-    |"sa_rows": ${msagaParams.saRows},
-    |"sa_cols": ${msagaParams.saCols},
-    |"inst_queue_size": ${msagaParams.instructionQueueEntries},
+    |"sa_rows": ${fsaParams.saRows},
+    |"sa_cols": ${fsaParams.saCols},
+    |"inst_queue_size": ${fsaParams.instructionQueueEntries},
     |"e_type": "${ev.elemType.typeRepr}",
     |"a_type": "${ev.accType.typeRepr}",
     |"mem_base": ${memParams.master.base},
     |"mem_size": ${memParams.master.size},
     |"mem_align": ${memParams.master.beatBytes},
     |"spad_base": 0,
-    |"spad_size": ${msagaParams.spadRows * msagaParams.saRows * ev.elemType.getWidth / 8},
+    |"spad_size": ${fsaParams.spadRows * fsaParams.saRows * ev.elemType.getWidth / 8},
     |"acc_base": 0,
-    |"acc_size": ${msagaParams.accRows * msagaParams.saCols * ev.accType.getWidth / 8}
+    |"acc_size": ${fsaParams.accRows * fsaParams.saCols * ev.accType.getWidth / 8}
     |}
     """.stripMargin
 

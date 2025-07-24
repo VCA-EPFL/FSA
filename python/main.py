@@ -184,6 +184,17 @@ if __name__ == "__main__":
             max_cycles=args.max_cycles,
             numactl_cmd=args.numactl
         )
+    elif args.engine == 'FPGA':
+        if args.build_dir is None:
+            build_dir = os.path.join('..', '..', '..', 'fpga')
+        else:
+            build_dir = args.build_dir
+        long_name = 'chipyard.fpga.u55c.U55CFPGATestHarness.' + args.config
+        config_file = os.path.join(
+            build_dir, 'generated-src', long_name,
+            long_name + '.FSAConfig.json'
+        )
+        engine = F.FPGA()
     else:
         assert f"{args.engine} is not supported yet."
 

@@ -245,7 +245,7 @@ wheels = [
 
 [[package]]
 name = "pyeasyfloat"
-version = "0.1.4"
+version = "0.1.6"
 source = { directory = "../../easyfloat" }
 dependencies = [
     { name = "numpy" },

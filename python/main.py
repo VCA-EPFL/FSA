@@ -99,17 +99,29 @@ def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarra
     O_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch)
     return O_torch.numpy()
 
+# following FlashAttention-3 paper
+def generate_matrix(shape, seed=None) -> np.ndarray:
+    if seed is not None:
+        np.random.seed(seed)
+    # Base matrix from N(0, 1)
+    base = np.random.normal(loc=0.0, scale=1.0, size=shape)
+    # Bernoulli mask (0.001 probability of being 1)
+    mask = np.random.binomial(n=1, p=0.001, size=shape)
+    # Noise from N(0, 100)
+    noise = np.random.normal(loc=0.0, scale=10.0, size=shape)
+    # Final matrix: base + noise * mask
+    return base + noise * mask
+
 
 def main(
-        seq_q: int, seq_kv: int, d: int, br: int, bc: int,
+        seq_q: int, seq_kv: int, d: int, br: int, bc: int, seed: int,
         engine: F.engine.BaseEngine,
         diff_easyfloat: bool = False,
         easyfloat_verbose: bool = False
     ):
-    np.random.seed(0)
-    Q_np = np.random.rand(seq_q, d).astype(np.float16)
-    K_np = np.random.rand(seq_kv, d).astype(np.float16)
-    V_np = np.random.rand(seq_kv, d).astype(np.float16)
+    Q_np = generate_matrix((seq_q, d), seed=seed).astype(np.float16)
+    K_np = generate_matrix((seq_kv, d), seed=seed).astype(np.float16)
+    V_np = generate_matrix((seq_kv, d), seed=seed).astype(np.float16)
 
     impls = {}
     if engine:
@@ -130,7 +142,7 @@ def main(
     print("Comparing with Torch...")
     O_torch = ref_torch(Q_np, K_np, V_np)
 
-    F.compare_matrices(
+    compare_matrices(
         ('torch', O_torch),
         impls
     )
@@ -139,6 +151,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seq_q', type=int, default=4, help='Sequence length for query')
     parser.add_argument('--seq_kv', type=int, default=4, help='Sequence length for key/value')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for matrix generation')
     parser.add_argument('--config', type=str, default='FSA4X4Fp16Config', help='Chisel generation config')
     parser.add_argument('--engine', type=str, default='Verilator', choices=['Verilator', 'FPGA'])
     parser.add_argument('--build_dir', type=str, default=None)
@@ -208,6 +221,7 @@ if __name__ == "__main__":
 
     main(
         args.seq_q, args.seq_kv,
-        d=cfg.sa_rows, br=cfg.sa_cols, bc=cfg.sa_rows, engine=engine,
+        d=cfg.sa_rows, br=cfg.sa_cols, bc=cfg.sa_rows, seed=args.seed,
+        engine=engine,
         diff_easyfloat=args.diff, easyfloat_verbose=args.diff_verbose
     )

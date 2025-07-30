@@ -41,7 +41,7 @@ class FPMacUnit(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int) 
 
 
 
-class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int) extends
+class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int, divBitsPerCycle: Int) extends
   MacUnit[FloatPoint, FloatPoint](FloatPoint(addEW, addMW), FloatPoint(addEW, addMW)) with HasMultiCycleIO
 {
   // for accumulator, we use in-place pwl constants
@@ -57,19 +57,29 @@ class FPAccUnit(addEW: Int, addMW: Int, pwlPieces: Int) extends
   mulAddExp2.io.in_c.fromIEEE(io.in_c.asUInt, addEW, addMW)
   mulAddExp2.io.in_exp2 := io.in_cmd === MacCMD.EXP2
 
-  val reciprocal = Module(new Reciprocal(addEW, addMW))
-  reciprocal.io.in := io.in_a.asUInt
-  reciprocal.io.in_valid := multiCycleIO.reciprocal_in_valid
-  reciprocal.io.fma_rounded_result := io.out_accType.asUInt
-  mulAddExp2.io.in_exp2 := !reciprocal.io.in_valid && io.in_cmd === MacCMD.EXP2
-  when(reciprocal.io.in_valid) {
-    mulAddExp2.io.in_a := reciprocal.io.fma_rawA
-    mulAddExp2.io.in_b := reciprocal.io.fma_rawB
-    mulAddExp2.io.in_c := reciprocal.io.fma_rawC
-  }
-  multiCycleIO.reciprocal_out_valid := reciprocal.io.out.valid
+  // calculate reciprocal using res = 1.0 / a
+  val div = Module(new RawFloat_Div(1 + addEW, 1 + addMW, divBitsPerCycle))
+  div.io.in.valid := multiCycleIO.reciprocal_in_valid
+  div.io.in.bits.a.fromIEEE(accType.one.asUInt, addEW, addMW)
+  div.io.in.bits.b := mulAddExp2.io.in_a
+  div.io.out.ready := true.B
+  multiCycleIO.reciprocal_out_valid := div.io.out.valid
 
-  io.out_accType := Rounding.round(mulAddExp2.io.out, RoundingMode.RNE, addEW, addMW).asTypeOf(accType)
+  require(div.io.out.bits.mantissa.getWidth == mulAddExp2.io.out.mantissa.getWidth)
+  require(div.io.out.bits.exp.getWidth <= mulAddExp2.io.out.exp.getWidth)
+  val rawOut = WireInit(mulAddExp2.io.out)
+  // the output exp of mulAddExp2 is wider than the output of div, so we need to adjust it
+  when(multiCycleIO.reciprocal_out_valid) {
+    rawOut.sign := div.io.out.bits.sign
+    // auto-sign-extend the exponent
+    rawOut.exp := div.io.out.bits.exp
+    rawOut.mantissa := div.io.out.bits.mantissa
+    rawOut.isInf := div.io.out.bits.isInf
+    rawOut.isNaN := div.io.out.bits.isNaN
+    rawOut.isZero := div.io.out.bits.isZero
+  }
+
+  io.out_accType := Rounding.round(rawOut, RoundingMode.RNE, addEW, addMW).asTypeOf(accType)
   io.out_elemType := io.out_accType
   io.out_exp2 := mulAddExp2.io.in_exp2
 }
@@ -90,7 +100,7 @@ class FPCmpUnit(ew: Int, mw: Int) extends CmpUnit(FloatPoint(ew, mw)) {
   io.out_diff := fma.io.out.asTypeOf(accType)
 }
 
-class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int = 8)
+class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces: Int = 8, divBitsPerCycle: Int = 2)
   extends ArithmeticImpl[FloatPoint, FloatPoint]
 {
 
@@ -104,11 +114,11 @@ class FPArithmeticImpl(mulEW: Int, mulMW: Int, addEW: Int, addMW: Int, pwlPieces
 
   override def peMac: MacUnit[FloatPoint, FloatPoint] = new FPMacUnit(mulEW, mulMW, addEW, addMW, pwlPieces)
 
-  override def accUnit: MacUnit[FloatPoint, FloatPoint] with HasMultiCycleIO = new FPAccUnit(addEW, addMW, pwlPieces)
+  override def accUnit: MacUnit[FloatPoint, FloatPoint] with HasMultiCycleIO = new FPAccUnit(addEW, addMW, pwlPieces, divBitsPerCycle)
 
   override def accCmp: CmpUnit[FloatPoint] = new FPCmpUnit(addEW, addMW)
 
-  override val reciprocalLatency: Int = Reciprocal.nCycles(addMW)
+  override val reciprocalLatency: Int = Div.nCycles(addMW, divBitsPerCycle)
 
   override val exp2PwlPieces: Int = pwlPieces
 

@@ -3,6 +3,23 @@ from pyeasyfloat.float import FloatPoint
 from pyeasyfloat.rounding import round_raw_float
 from pyeasyfloat.backend import BaseFPBackend, PyEasyFloatBackend
 
+def compare_matrices(ref: tuple[str, np.ndarray], impls: dict[str, np.ndarray]):
+    def error_metrics(a, b):
+        abs_diff = np.abs(a - b)
+        rel_diff = np.abs((a - b) / (b + 1e-8))
+        return {
+            'MAE': np.mean(abs_diff),
+            'RMSE': np.sqrt(np.mean((a - b) ** 2)),
+            'MaxErr': np.max(abs_diff),
+            'RelErr': np.mean(rel_diff),
+            'MaxRelErr': np.max(rel_diff),
+        }
+    ref_name, ref_data = ref
+    for name, data in impls.items():
+        err = error_metrics(data, ref_data)
+        print(f'Error of {name} vs {ref_name}:', err)
+
+
 type Matrix = list[list[FloatPoint]]
 
 def mat_hex_str(mat: Matrix) -> str:
@@ -195,7 +212,8 @@ class FlashAttentionTile:
             scale = self.ExpDeltaRowMaxS2[row][0]
 
             self.AccRowSum[row][0] = self.backend.fma(old_sum, scale, new_sum, old_sum.ew, old_sum.mw)
-            reciprocal = self.backend.reciprocal(self.AccRowSum[row][0])
+            one_fp = np_to_fp(np.float32(1), self.acc_ew, self.acc_mw)
+            reciprocal = self.backend.div(one_fp, self.AccRowSum[row][0])
             self.AccRowSumReciprocal.append([reciprocal])
 
             norm_row = []

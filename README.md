@@ -116,7 +116,7 @@ We provide two options to integrate FSA into Chipyard:
 
 [AMD U55C FPGA board](https://www.amd.com/en/products/accelerators/alveo/u55c/a-u55c-p00g-pq-g.html) is supported by this project. 
 
-![FPGA arch](./docs/fpga.jpg)
+![FPGA arch](./docs/fpga-asa.jpg)
 
 ### 1. FPGA bit generation
 

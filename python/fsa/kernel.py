@@ -131,7 +131,7 @@ def mx_load_stationary(tile: STile, sem: Optional[Semaphore], aq: bool = True, r
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 
 @check_kernel_ctx
-def mx_attn_score(k: STile, l: ATile, accumulate: bool, sem: Optional[Semaphore], aq: bool = True, rl: bool = True) -> None:
+def mx_attn_score(k: STile, l: ATile, accumulate: bool, sem: Optional[Semaphore], causal: bool, aq: bool = True, rl: bool = True) -> None:
     assert len(k.shape) == 2 and l.shape == (1, __g_kernel_ctx.cols)
     header = build_matrix_instruction_header(
         MxFunc.ATTN_SCORE.value, False,
@@ -145,7 +145,8 @@ def mx_attn_score(k: STile, l: ATile, accumulate: bool, sem: Optional[Semaphore]
     acc = MatrixInstrucionAcc(
         __g_kernel_ctx.tile_row_addr(l),
         __g_kernel_ctx.tile_stride(l),
-        not accumulate
+        not accumulate,
+        causal
     )
     __g_kernel_ctx.push(MatrixInstruction(header, spad, acc))
 

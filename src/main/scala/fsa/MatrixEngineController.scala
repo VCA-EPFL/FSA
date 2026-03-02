@@ -98,7 +98,7 @@ class MatrixControlFSM
     val timerBase = timerBaseOpt.getOrElse(flags.map(_ => 0))
     val (valid, ctrl) = flags.zip(ctrlDesc).zip(timerBase).flatMap { case ((flag, descSeq), tBase) =>
       descSeq.map{ desc =>
-        (flag && desc.valid(timer, tBase)) -> desc.toHardware(rs1, rs2)
+        (flag && desc.valid(timer, tBase)) -> desc.toHardware(rs1, rs2, timer)
       }
     }.unzip
     val out = Wire(Valid(chiselTypeOf(ctrl.head)))

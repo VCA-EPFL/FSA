@@ -153,6 +153,7 @@ class MatrixInstrucionAcc(InstructionLike):
     addr: int
     stride: int
     zero: bool
+    causal: bool = False
 
     @property
     def bits(self) -> int:
@@ -160,6 +161,7 @@ class MatrixInstrucionAcc(InstructionLike):
             InstructionField(self.addr, 31, 12),
             InstructionField(self.stride, 11, 7, signed=True),
             InstructionField(self.zero, 6, 6),
+            InstructionField(self.causal, 5, 5),
         ))
 
 @dataclass

@@ -17,6 +17,7 @@ object CmpControlCmd {
 
 class CmpControl extends Bundle {
   val cmd = UInt(CmpControlCmd.width.W)
+  val causalCounter = UInt(8.W) // TODO: make width a parameter
 }
 
 class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, A]) extends Module {
@@ -42,7 +43,9 @@ class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, 
   val prop_exp2_intercepts = cmd === CmpControlCmd.PROP_EXP2_INTERCEPTS
   val zero = accType.zero
 
-  cmpUnit.io.in_a := Mux(update_new_max, io.d_input.bits, Mux(prop_new_max, zero, oldMax))
+  val d_input = Mux(io.in_ctrl.bits.causalCounter === 0.U, io.d_input.bits, accType.minimum)
+
+  cmpUnit.io.in_a := Mux(update_new_max, d_input, Mux(prop_new_max, zero, oldMax))
   cmpUnit.io.in_b := newMax
 
   val exp2_intercepts = VecInit(ev.exp2PwlIntercepts)
@@ -65,7 +68,7 @@ class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, 
     })
   }
 
-  val downCastDIn = ev.viewEasA(ev.cvtAtoE(io.d_input.bits))
+  val downCastDIn = ev.viewEasA(ev.cvtAtoE(d_input))
   io.d_output.bits := Mux(prop_zero,
     zero,
     Mux(prop_exp2_intercepts,
@@ -78,4 +81,5 @@ class CMP[E <: Data : Arithmetic, A <: Data : Arithmetic](ev: ArithmeticImpl[E, 
   )
   io.d_output.valid := io.in_ctrl.valid && !do_reset
   io.out_ctrl := io.in_ctrl
+  io.out_ctrl.bits.causalCounter := Mux(io.in_ctrl.bits.causalCounter === 0.U, 0.U, io.in_ctrl.bits.causalCounter - 1.U)
 }

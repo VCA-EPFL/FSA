@@ -7,7 +7,7 @@ from fa_ref import *
 from fsa.tensor import MTile, ATile, STile
 
 @F.kernel
-def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: int) -> MTile:
+def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: int, causal: bool) -> MTile:
     assert (len(Q.shape), len(K.shape), len(V_t.shape)) == (2, 2, 2)
     seq_q, d = Q.shape
     seq_k, dk = K.shape
@@ -43,6 +43,9 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
         Q_tile_rev = Q_tile.reverse(dim=0)
         F.load_tile(Q_i, Q_tile, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
+            if causal and j > i:
+                # skip causal future blocks
+                break
             is_first_iter = j == 0
             is_last_iter = j == len(K_BLOCKS) - 1
             buffer = j % 2
@@ -52,7 +55,7 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
             F.mx_load_stationary(Q_tile_rev, sem_q, aq=is_first_iter, rl=is_last_iter)
 
             F.load_tile(K_j, K_tile, sem_k)
-            F.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k)
+            F.mx_attn_score(K_tile, L_tile, not is_first_iter, sem_k, causal and i == j)
 
             F.load_tile(V_t_j, V_t_tile, sem_v)
             F.mx_attn_value(V_t_tile, O_t_tile, not is_first_iter, sem_v)
@@ -63,7 +66,8 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
     F.fence(mx=True, dma=True, stop=True)
     return O_t
 
-def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int, verbose: bool) -> np.ndarray:
+def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: int, bc: int, causal: bool, verbose: bool) -> np.ndarray:
+    assert not causal, "PyEasyFloat reference does not support causal attention yet"
     row_blocks = Q_np.shape[0] // br
     col_blocks = K_np.shape[0] // bc
     d = Q_np.shape[-1]
@@ -92,11 +96,11 @@ def ref_pyeasyfloat(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, br: in
         res.append(mat_to_numpy_array(tile.NormO))
     return np.concatenate(res, axis=0)
 
-def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray) -> np.ndarray:
+def ref_torch(Q_np: np.ndarray, K_np: np.ndarray, V_np: np.ndarray, causal: bool) -> np.ndarray:
     Q_torch = torch.from_numpy(Q_np)
     K_torch = torch.from_numpy(K_np)
     V_torch = torch.from_numpy(V_np)
-    O_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch)
+    O_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch, is_causal=causal)
     return O_torch.numpy()
 
 # following FlashAttention-3 paper
@@ -116,6 +120,7 @@ def generate_matrix(shape, seed=None) -> np.ndarray:
 def main(
         seq_q: int, seq_kv: int, d: int, br: int, bc: int, seed: int,
         engine: F.engine.BaseEngine,
+        causal: bool = False,
         diff_easyfloat: bool = False,
         easyfloat_verbose: bool = False
     ):
@@ -128,7 +133,7 @@ def main(
         Q = F.from_numpy(Q_np)
         K = F.from_numpy(K_np)
         V_t = F.from_numpy(V_np.T)
-        O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc))
+        O_t = engine.execute(scaled_dot_product_attention(Q, K, V_t, br, bc, causal))
         O = F.to_numpy(O_t).T
         impls['FSA'] = O
 
@@ -136,11 +141,11 @@ def main(
         print("Comparing with PyEasyFloat...")
         if easyfloat_verbose:
             print("PyEasyFloat verbose mode enabled.")
-        O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, br, bc, easyfloat_verbose)
+        O_pyeasyfloat = ref_pyeasyfloat(Q_np, K_np, V_np, br, bc, causal, easyfloat_verbose)
         impls['PyEasyFloat'] = O_pyeasyfloat
 
     print("Comparing with Torch...")
-    O_torch = ref_torch(Q_np, K_np, V_np)
+    O_torch = ref_torch(Q_np, K_np, V_np, causal)
 
     compare_matrices(
         ('torch', O_torch),
@@ -152,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument('--seq_q', type=int, default=4, help='Sequence length for query')
     parser.add_argument('--seq_kv', type=int, default=4, help='Sequence length for key/value')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for matrix generation')
+    parser.add_argument('--causal', action='store_true', default=False, help='Whether to run causal attention')
     parser.add_argument('--config', type=str, default='FSA4X4Fp16Config', help='Chisel generation config')
     parser.add_argument('--engine', type=str, default='Verilator', choices=['Verilator', 'FPGA'])
     parser.add_argument('--build_dir', type=str, default=None)
@@ -223,5 +229,6 @@ if __name__ == "__main__":
         args.seq_q, args.seq_kv,
         d=cfg.sa_rows, br=cfg.sa_cols, bc=cfg.sa_rows, seed=args.seed,
         engine=engine,
+        causal=args.causal,
         diff_easyfloat=args.diff, easyfloat_verbose=args.diff_verbose
     )

@@ -23,7 +23,8 @@ class MatrixInstructionSpad(val addrWidth: Int) extends NBytesBundle(4) with Has
 class MatrixInstructionAcc(val addrWidth: Int) extends NBytesBundle(4) with HasAddr {
   val stride = SInt(ACC_STRIDE_BITS.W)
   val zero = Bool()
-  val _pad = padOpt(ACC_MAX_ADDR_BITS + ACC_STRIDE_BITS + 1)
+  val causal = Bool()
+  val _pad = padOpt(ACC_MAX_ADDR_BITS + ACC_STRIDE_BITS + 2)
   override def maxAddrWidth: Int = ACC_MAX_ADDR_BITS
   checkWidth()
 }

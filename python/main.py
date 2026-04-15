@@ -43,11 +43,15 @@ def scaled_dot_product_attention(Q: MTile, K: MTile, V_t: MTile, br: int, bc: in
         Q_tile_rev = Q_tile.reverse(dim=0)
         F.load_tile(Q_i, Q_tile, sem_q)
         for j, (K_j, V_t_j) in enumerate(zip(K_BLOCKS, V_t_BLOCKS)):
-            if causal and j > i:
-                # skip causal future blocks
-                break
+            if causal:
+                is_last_iter = j == i
+                if j > i:
+                    # skip causal future blocks
+                    break
+            else:
+                is_last_iter = j == len(K_BLOCKS) - 1
+
             is_first_iter = j == 0
-            is_last_iter = j == len(K_BLOCKS) - 1
             buffer = j % 2
             K_tile, V_t_tile = K_tiles[buffer], V_t_tiles[buffer]
             sem_k, sem_v = sem_k_lst[buffer], sem_v_lst[buffer]
